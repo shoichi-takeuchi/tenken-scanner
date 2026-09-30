@@ -1238,6 +1238,7 @@
         //   ブックマーク側のURLは消えないので、次回も自動解除は効く。
         function stripKeyFromUrl() {
             try {
+                return;  // ★ 竹内専用版: #k= を残す（ホーム画面追加・ブックマークに鍵が残り、端末保存が別領域でも入力不要）
                 if (location.hash && /[#&]k=/.test(location.hash) && history.replaceState) {
                     history.replaceState(null, "", location.pathname + location.search);
                 }
