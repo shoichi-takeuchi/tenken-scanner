@@ -955,7 +955,7 @@
         <div id="geo-status" style="font-size:13px;color:#555;margin-top:4px;min-height:1.2em;" onclick="autoDetectShop()">📍 位置情報から店舗を探します（タップで再取得）</div>
         <div id="dict-status"></div>
         <button class="btn-primary" onclick="startApp('new')">🆕 新台の点検を開始</button>
-        <button class="btn-primary" style="background:#b45309;margin-top:8px;" onclick="startApp('seal')">🔧 封印破損の点検を開始（ROM入力なし）</button>
+        <button class="btn-primary" style="background:#b45309;margin-top:8px;" onclick="startApp('seal')">🔧 封印破損の点検を開始（ロット番号は現在値を保持）</button>
         <button class="btn-secondary" onclick="showSessionList(true)" style="margin-top:8px;">📁 保存データを開く（前回の続き）</button>
         <div class="shop-list-grid" id="display-shop-list"></div>
     </div>
@@ -3624,12 +3624,18 @@
                 // ★ V16.9: 類似QRから予測できた場合はオレンジのバナーで案内するため赤文字は出さない
                 setUnknownMainboardNote(!typeMatched && !histHit && !fuzzyHit);
                 if (inspectionMode === 'seal') {   // ★ 竹内専用版: 封印破損はROM入力を省く
-                    currentData.romId = "なし";
-                    currentStep = 4;
-                    updateUI();
-                    html5QrCode && html5QrCode.resume && html5QrCode.resume();
-                    saveState();
-                    return;
+                    // ⛔ 2026-09-30: 「なし」で送ると BOT が es4 の製造ロットを「なし」に上書きする（5店舗35台で実発生）。
+                    //    辞書（es4 の履歴）にこの主基板のロット番号があれば、その現在値をそのまま書く＝変更なしで通る。無ければ③で入力してもらう。
+                    if (histHit && autoFilledRom) {
+                        currentData.romId = autoFilledRom;
+                        currentStep = 4;
+                        updateUI();
+                        html5QrCode && html5QrCode.resume && html5QrCode.resume();
+                        saveState();
+                        showScanToast("封印破損: ロット番号は現在値 " + autoFilledRom + " を保持");
+                        return;
+                    }
+                    showScanToast("この主基板のロット番号が辞書に無いため、ROMを入力して下さい（スキップすると「なし」で上書きされます）");
                 }
                 currentStep = 3;
                 updateUI();
@@ -4361,6 +4367,7 @@
 
         function skipRomInput() {
             if (currentStep !== 3) return;
+            if (inspectionMode === 'seal' && !confirm("ロット番号を「なし」で送ると、イージスに入っている製造ロットが「なし」に上書きされます。\nそれでもスキップしますか？")) return;   // ★ 竹内専用版 2026-09-30
 
             currentData.romId = "なし";
             currentStep = 4;
@@ -4378,14 +4385,7 @@
                 setUnknownMainboardNote(false); // ★ V16.3: 未知主基板の警告もクリア
                 clearFuzzyRomState();           // ★ V16.9: 予測入力の表示・状態もクリア
                 expectedSeals = null;           // ★ V18.8: 主基板なし＝照合対象なし
-                if (inspectionMode === 'seal') {   // ★ 竹内専用版: 封印破損はROM入力を省く
-                    currentData.romId = "なし";
-                    currentStep = 4;
-                    updateUI();
-                    html5QrCode && html5QrCode.resume && html5QrCode.resume();
-                    saveState();
-                    return;
-                }
+                if (inspectionMode === 'seal') showScanToast("主基板なし: ロット番号が判らないため ROM を入力して下さい（スキップすると「なし」で上書きされます）");   // ★ 竹内専用版 2026-09-30
                 currentStep = 3;
                 updateUI();
                 focusRomInput();
