@@ -954,7 +954,8 @@
         <div id="shop-name" class="shop-name-display">店舗を選択してください</div>
         <div id="geo-status" style="font-size:13px;color:#555;margin-top:4px;min-height:1.2em;" onclick="autoDetectShop()">📍 位置情報から店舗を探します（タップで再取得）</div>
         <div id="dict-status"></div>
-        <button class="btn-primary" onclick="startApp()">点検開始</button>
+        <button class="btn-primary" onclick="startApp('new')">🆕 新台の点検を開始</button>
+        <button class="btn-primary" style="background:#b45309;margin-top:8px;" onclick="startApp('seal')">🔧 封印破損の点検を開始（ROM入力なし）</button>
         <button class="btn-secondary" onclick="showSessionList(true)" style="margin-top:8px;">📁 保存データを開く（前回の続き）</button>
         <div class="shop-list-grid" id="display-shop-list"></div>
     </div>
@@ -1446,6 +1447,7 @@
 
         let staffId, shopId;
         let currentStep = 1;
+        let inspectionMode = 'new';   // ★ 竹内専用版: 'new'=新台（①②③④）／'seal'=封印破損（①②④・ROM入力なし）
         let lastRenderedStep = 0; // ★ V16.6: ステップ変化検知（画面遷移時のスクロールトップ用）
         let currentData = { seals: [] };
         let allData = [];
@@ -1475,6 +1477,7 @@
                     allData: allData,
                     currentData: currentData,
                     currentStep: currentStep,
+                    inspectionMode: inspectionMode,   // ★ 竹内専用版
                     prevRom1: prevRom1,
                     prevRom3: prevRom3,
                     startedAt: (prev && prev.startedAt) ? prev.startedAt : now,
@@ -1559,6 +1562,7 @@
             currentData = saved.currentData || { seals: [] };
             if (!currentData.seals) currentData.seals = [];
             currentStep = saved.currentStep || 1;
+            inspectionMode = saved.inspectionMode || 'new';   // ★ 竹内専用版
             prevRom1 = saved.prevRom1 || "";
             prevRom3 = saved.prevRom3 || "";
 
@@ -1899,7 +1903,8 @@
                 shopList[id] || (id === "" ? "店舗を選択してください" : "カスタム(" + id + ")");
         }
 
-        function startApp() {
+        function startApp(mode) {
+            inspectionMode = (mode === 'seal') ? 'seal' : 'new';   // ★ 竹内専用版
             staffId = document.getElementById('staff-id').value;
             let idInput = document.getElementById('shop-id').value;
             shopId = (idInput.length === 1) ? "0" + idInput : idInput;
@@ -3618,6 +3623,14 @@
                 // ★ V16.3: 判別マップにも過去履歴にも無い＝過去に例の無い主基板QR → 赤文字警告
                 // ★ V16.9: 類似QRから予測できた場合はオレンジのバナーで案内するため赤文字は出さない
                 setUnknownMainboardNote(!typeMatched && !histHit && !fuzzyHit);
+                if (inspectionMode === 'seal') {   // ★ 竹内専用版: 封印破損はROM入力を省く
+                    currentData.romId = "なし";
+                    currentStep = 4;
+                    updateUI();
+                    html5QrCode && html5QrCode.resume && html5QrCode.resume();
+                    saveState();
+                    return;
+                }
                 currentStep = 3;
                 updateUI();
                 focusRomInput();
@@ -3768,7 +3781,7 @@
             }
 
             const titles = ["", "① 台番号スキャン", "② 主基板スキャン", "③ ROM入力", "④ 封印スキャン"];
-            document.getElementById('status').innerText = titles[currentStep];
+            document.getElementById('status').innerText = titles[currentStep] + (inspectionMode === 'seal' ? "　🔧封印破損" : "");   // ★ 竹内専用版
 
             updateSealRegisterButton();   // ★ V18.5: 画面が変わったら封印登録ボタンの表示も合わせる
             renderSealHistoryNote();      // ★ V18.8: 照合パネルも画面に合わせる
@@ -4365,6 +4378,14 @@
                 setUnknownMainboardNote(false); // ★ V16.3: 未知主基板の警告もクリア
                 clearFuzzyRomState();           // ★ V16.9: 予測入力の表示・状態もクリア
                 expectedSeals = null;           // ★ V18.8: 主基板なし＝照合対象なし
+                if (inspectionMode === 'seal') {   // ★ 竹内専用版: 封印破損はROM入力を省く
+                    currentData.romId = "なし";
+                    currentStep = 4;
+                    updateUI();
+                    html5QrCode && html5QrCode.resume && html5QrCode.resume();
+                    saveState();
+                    return;
+                }
                 currentStep = 3;
                 updateUI();
                 focusRomInput();
@@ -4423,6 +4444,8 @@
             if (currentStep === 4 && currentData.seals.length > 0) {
                 currentData.seals.pop();
                 updateSealDisplay();
+            } else if (currentStep === 4 && inspectionMode === 'seal') {
+                currentStep = 2;   // ★ 竹内専用版: 封印破損は③が無いので②へ戻る
             } else if (currentStep > 1) {
                 currentStep--;
             }
