@@ -886,9 +886,12 @@
     <!-- ★ V16.4: 保存データ（過去7日）一覧。起動時に複数あれば表示 -->
     <div id="session-list-overlay">
         <div id="session-list-modal">
-            <h3>📁 保存データを選んで再開</h3>
-            <div id="session-list-note">点検開始ごとに保存／7日で自動削除</div>
+            <h3>📁 続きから？ 新規？</h3>
+            <div id="session-list-note">端末内の保存（点検開始ごと・7日）と、1台確定ごとの CSV 控え。Files の CSV からも継続できます</div>
             <div id="session-list"></div>
+            <div id="csv-backup-row"></div>
+            <input type="file" id="csv-resume-file" accept=".csv,text/csv,text/plain" style="display:none;" onchange="resumeFromCsvFile(this)">
+            <button class="btn-secondary" onclick="document.getElementById('csv-resume-file').click()">📄 CSV ファイルから継続（Files）</button>
             <div id="session-list-empty" style="display:none;">保存データはありません</div>
             <button id="session-new-btn" class="btn-primary" onclick="startNewFromList()">＋ 新規で点検開始</button>
             <button class="btn-danger" onclick="clearAllSessions()">🗑 すべて削除</button>
@@ -953,6 +956,7 @@
         <input type="number" inputmode="numeric" id="shop-id" placeholder="店舗番号 (2桁)" oninput="updateShopName()">
         <div id="shop-name" class="shop-name-display">店舗を選択してください</div>
         <div id="geo-status" style="font-size:13px;color:#555;margin-top:4px;min-height:1.2em;" onclick="autoDetectShop()">📍 位置情報から店舗を探します（タップで再取得）</div>
+        <button type="button" id="shop-manual-btn" class="btn-secondary" style="margin-top:4px;" onclick="showShopManual(true)">店舗を手で選ぶ</button>
         <div id="dict-status"></div>
         <button class="btn-primary" onclick="startApp('new')">🆕 新台の点検を開始</button>
         <button class="btn-primary" style="background:#b45309;margin-top:8px;" onclick="startApp('seal')">🔧 封印破損の点検を開始（ロット番号は現在値を保持）</button>
@@ -1069,6 +1073,7 @@
         <!-- ★ V22.7: スキャン済みが増えても一番下までスワイプせずに済むよう、
              ボタン2つをスキャン済み一覧の「上」へ移動（一覧は下へ伸びていく） -->
         <button class="btn-csv" onclick="downloadCSV()">現在のデータをCSV保存</button>
+        <button class="btn-secondary" onclick="exportCsvBackupFile()">💾 控えを書き出す（Files へ・Slack 案内なし）</button>
         <button class="btn-secondary" onclick="showSessionList(true)" style="margin-bottom:12px;">📁 自動保存データ一覧（続きから／削除）</button>
 
         <div class="card" style="overflow-x:auto; margin-bottom:30px;">   <!-- ★ V22.7: 最下部になったので下の余白をここへ -->
@@ -1130,14 +1135,231 @@
                     if (input && !input.value) { input.value = id; updateShopName(); }
                     let extra = "";
                     if (ranked[1] && ranked[1][1] <= GEO_AUTO_MAX_M) extra = "（次候補 " + ranked[1][0] + ":" + shopList[ranked[1][0]] + " " + Math.round(ranked[1][1]) + "m）";
-                    geoSetStatus("📍 位置情報から " + id + ":" + shopList[id] + " を特定（" + dTxt + "・精度±" + acc + "m）" + extra + "。違えば番号を打ち直して下さい");
+                    geoSetStatus("📍 位置情報から " + id + ":" + shopList[id] + " を特定（" + dTxt + "・精度±" + acc + "m）" + extra + "。違えば「店舗を手で選ぶ」から打ち直して下さい");
                 } else {
                     geoSetStatus("📍 近くに店舗がありません（最寄り " + id + ":" + shopList[id] + " " + dTxt + "）。店舗番号を入力して下さい");
+                    if (typeof showShopManual === "function") showShopManual(true);   // ★ 11: 位置で決まらない時だけ手入力欄を出す
                 }
             }, err => {
                 const why = err.code === 1 ? "位置情報が許可されていません（iPhoneの設定→Safari→位置情報）" : err.code === 3 ? "位置情報の取得に時間がかかっています" : "位置情報を取得できませんでした";
                 geoSetStatus("📍 " + why + "。店舗番号を入力して下さい");
+                if (typeof showShopManual === "function") showShopManual(true);   // ★ 11: 位置で決まらない時だけ手入力欄を出す
             }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+        }
+        // ★ 竹内専用版 9〜11（2026-10-02 竹内さんご指示「作業中にアプリが落ちて収集データが全部消えた」）
+        //   9. 起動時に必ず「継続／新規」を聞く（保存が無くても出す。無い事が一目で判る）。
+        //      1台確定ごとに、端末保存（7日・複数セッション）に加えて CSV 形式の控えを別キー（CSV_BACKUP_KEY）にも書く。
+        //      Files に書き出した CSV ファイルを選んで継続する事もできる（端末保存が別領域になった・消えた時の保険）。
+        //  10. 「控えを書き出す」: Slack 送信の案内を出さずに、今のデータを CSV として Files へ保存（共有シートが使えれば共有シート）。
+        //      iPhone の Web アプリはページから勝手にファイルを書けないので、自動で書けるのは端末内の保存まで。ファイルはこのボタンで。
+        //  11. 店舗選択は位置情報に任せる。店舗番号の手入力欄・店舗一覧は、位置情報が使えない／近くに店が無い時と
+        //      「店舗を手で選ぶ」を押した時だけ出す。
+        const CSV_BACKUP_KEY = "inspector_csv_backup_v1";
+        const CSV_HEADER = "社員,店舗,時間,台番,主,ROM,封印";
+
+        function csvTextOfAllData() {
+            let t = CSV_HEADER + "\r\n";
+            allData.forEach(d => {
+                t += `${staffId},${shopId},${d.time},${d.machineId},${d.mainBoardId},${d.romId},"${d.sealsText}"\r\n`;
+            });
+            return t;
+        }
+        function writeCsvBackup() {
+            try {
+                if (!allData || allData.length === 0) return;
+                localStorage.setItem(CSV_BACKUP_KEY, JSON.stringify({
+                    savedAt: new Date().toISOString(), staffId: staffId, shopId: shopId,
+                    inspectionMode: inspectionMode, count: allData.length, csv: csvTextOfAllData()
+                }));
+            } catch (e) { console.error("CSV控えの保存失敗:", e); }
+            mirrorCsvBackupToIdb();   // ★ 12
+        }
+        function loadCsvBackup() {
+            try { const o = JSON.parse(localStorage.getItem(CSV_BACKUP_KEY)); return (o && o.csv) ? o : null; }
+            catch (e) { return null; }
+        }
+        // 1行の CSV を分解（"a / b" の引用符付きに対応）
+        function splitCsvLine(line) {
+            const out = []; let cur = "", q = false;
+            for (let i = 0; i < line.length; i++) {
+                const c = line[i];
+                if (q) {
+                    if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+                    else cur += c;
+                } else if (c === '"') q = true;
+                else if (c === ',') { out.push(cur); cur = ""; }
+                else cur += c;
+            }
+            out.push(cur);
+            return out;
+        }
+        // CSV 本文 → { staffId, shopId, rows[] }。このアプリが書き出す列順（社員,店舗,時間,台番,主,ROM,封印）だけを受け付ける
+        function parseInspectionCsv(text) {
+            const lines = text.replace(/^﻿/, "").split(/\r?\n/).filter(l => l.trim() !== "");
+            if (lines.length === 0) throw new Error("空のファイルです");
+            const head = splitCsvLine(lines[0]).map(s => s.trim());
+            if (head.join(",") !== CSV_HEADER) throw new Error("このアプリの CSV ではありません（先頭行: " + lines[0].slice(0, 40) + "）");
+            const rows = []; let sid = "", shop = "";
+            for (let i = 1; i < lines.length; i++) {
+                const c = splitCsvLine(lines[i]);
+                if (c.length < 7) continue;
+                if (!sid) { sid = c[0]; shop = c[1]; }
+                const sealsText = c[6] || "";
+                rows.push({
+                    machineId: c[3], mainBoardId: c[4], romId: c[5],
+                    sealsText: sealsText, seals: sealsText ? sealsText.split(" / ").filter(Boolean) : [],
+                    time: c[2]
+                });
+            }
+            if (rows.length === 0) throw new Error("台のデータが 1 行もありません");
+            return { staffId: sid, shopId: shop, rows: rows };
+        }
+        function restoreFromParsedCsv(p, mode, label) {
+            activeSessionId = newSessionId();
+            closeSessionList();
+            restoreState({
+                staffId: p.staffId || BUILTIN_STAFF_ID, shopId: p.shopId, allData: p.rows,
+                currentData: { seals: [] }, currentStep: 1, inspectionMode: mode || 'new',
+                prevRom1: "", prevRom3: ""
+            });
+            saveState();
+            writeCsvBackup();
+            showScanToast(label + " から " + p.rows.length + "台を読み込みました（店舗 " + (p.shopId || "?") + "）");
+        }
+        function askModeForCsv() {
+            return confirm("封印破損モードで継続しますか？\n\nOK＝封印破損（ROM入力なし）\nキャンセル＝新台（①②③④）") ? 'seal' : 'new';
+        }
+        function resumeFromCsvBackup() {
+            const b = loadCsvBackup();
+            if (!b) { alert("CSV の控えがありません"); return; }
+            try { restoreFromParsedCsv(parseInspectionCsv(b.csv), b.inspectionMode, "端末内の CSV 控え"); }
+            catch (e) { alert("CSV 控えを読めません: " + e.message); }
+        }
+        function decodeCsvBytes(buf) {
+            const u8 = new Uint8Array(buf);
+            // UTF-8 BOM ならそのまま
+            if (u8[0] === 0xEF && u8[1] === 0xBB && u8[2] === 0xBF) return new TextDecoder("utf-8").decode(u8);
+            try {
+                if (typeof Encoding !== 'undefined') return Encoding.convert(u8, { to: 'UNICODE', from: 'SJIS', type: 'string' });
+                return new TextDecoder("shift_jis").decode(u8);
+            } catch (e) { return new TextDecoder("utf-8").decode(u8); }
+        }
+        function resumeFromCsvFile(input) {
+            const f = input && input.files && input.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = () => {
+                try {
+                    const p = parseInspectionCsv(decodeCsvBytes(r.result));
+                    restoreFromParsedCsv(p, askModeForCsv(), "ファイル " + f.name);
+                } catch (e) { alert("CSV を読めません: " + e.message); }
+                input.value = "";
+            };
+            r.onerror = () => { alert("ファイルを読めませんでした"); input.value = ""; };
+            r.readAsArrayBuffer(f);
+        }
+        // 10. 控えを書き出す（Slack 案内なし）。共有シートが使えれば「"ファイル"に保存」が選べる。無ければ従来のダウンロード
+        async function exportCsvBackupFile() {
+            if (!allData || allData.length === 0) { alert("まだ確定した台がありません"); return; }
+            const { blob, fileName } = buildCsvBlobAndFileName();
+            try {
+                const file = new File([blob], fileName, { type: "text/csv" });
+                if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                    await navigator.share({ files: [file], title: fileName });
+                    showScanToast("控えを書き出しました: " + fileName);
+                    return;
+                }
+            } catch (e) { if (e && e.name === "AbortError") return; }
+            saveBlobAsFile(blob, fileName);
+            showScanToast("控えをダウンロードしました: " + fileName);
+        }
+        // 9. 起動時の一覧に CSV 控えの行を足す
+        function renderCsvBackupRow() {
+            const box = document.getElementById('csv-backup-row');
+            if (!box) return 0;
+            const b = loadCsvBackup();
+            if (!b) { box.innerHTML = ""; return 0; }
+            const dt = b.savedAt ? new Date(b.savedAt).toLocaleString() : "-";
+            const shopName = (b.shopId && shopList[b.shopId]) ? (" " + shopList[b.shopId]) : "";
+            box.innerHTML = '<div class="session-row">' +
+                '<div class="meta"><b>📄 CSV 控え（1台確定ごとに自動）</b><br>店舗: ' + escHtml(b.shopId || "-") + escHtml(shopName) +
+                '／' + (b.count || 0) + '台／' + (b.inspectionMode === 'seal' ? '封印破損' : '新台') + '<br>保存: ' + escHtml(dt) + '</div>' +
+                '<div class="session-actions"><button class="btn-success" onclick="resumeFromCsvBackup()">続きから</button></div></div>';
+            return 1;
+        }
+        // 11. 店舗の手入力欄の表示切替
+        function showShopManual(on) {
+            ['shop-id', 'shop-name', 'display-shop-list'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = on ? '' : 'none';
+            });
+            const b = document.getElementById('shop-manual-btn');
+            if (b) b.style.display = on ? 'none' : '';
+            if (on) { const inp = document.getElementById('shop-id'); if (inp && !inp.value) { try { inp.focus(); } catch (e) {} } }
+        }
+
+        // ★ 12. IndexedDB にも同じ物を書く（2026-10-02 竹内さん: アプリ切替画面から上へスワイプ＝強制終了 → 開き直すと全消え）
+        //   localStorage は WebKit が後からまとめてディスクへ書く（書き遅れ）ため、強制終了で失われ得る。IndexedDB はトランザクション
+        //   完了時に書き終わるので、こちらを「本物の控え」にする。起動時に localStorage 側が空で IndexedDB にあれば、そこから戻す。
+        const IDB_NAME = "inspector_backup_v1", IDB_STORE = "kv";
+        function idbOpen() {
+            return new Promise((res, rej) => {
+                if (!window.indexedDB) { rej(new Error("IndexedDB なし")); return; }
+                const r = indexedDB.open(IDB_NAME, 1);
+                r.onupgradeneeded = () => { r.result.createObjectStore(IDB_STORE); };
+                r.onsuccess = () => res(r.result);
+                r.onerror = () => rej(r.error);
+            });
+        }
+        async function idbPut(key, val) {
+            try {
+                const db = await idbOpen();
+                await new Promise((res, rej) => {
+                    const tx = db.transaction(IDB_STORE, "readwrite");
+                    tx.objectStore(IDB_STORE).put(val, key);
+                    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
+                });
+                db.close();
+            } catch (e) { console.error("IndexedDB 保存失敗:", key, e); }
+        }
+        async function idbGet(key) {
+            try {
+                const db = await idbOpen();
+                const v = await new Promise((res, rej) => {
+                    const tx = db.transaction(IDB_STORE, "readonly");
+                    const q = tx.objectStore(IDB_STORE).get(key);
+                    q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error);
+                });
+                db.close(); return v;
+            } catch (e) { console.error("IndexedDB 読込失敗:", key, e); return undefined; }
+        }
+        // 保存のたびに IndexedDB へも（writeSessions / writeCsvBackup から呼ぶ）
+        function mirrorSessionsToIdb(obj) { idbPut("sessions", obj); }
+        function mirrorCsvBackupToIdb() { try { const b = loadCsvBackup(); if (b) idbPut("csv_backup", b); } catch (e) {} }
+        // 起動時: localStorage が空（または壊れている）で IndexedDB に残っていれば戻してから一覧を出し直す
+        async function recoverFromIdbIfNeeded() {
+            try {
+                const cur = loadSessions();
+                const curN = Object.keys(cur).filter(id => hasMeaningfulSavedData(cur[id])).length;
+                let changed = false;
+                if (curN === 0) {
+                    const s = await idbGet("sessions");
+                    if (s && typeof s === "object") {
+                        const n = Object.keys(s).filter(id => hasMeaningfulSavedData(s[id])).length;
+                        if (n > 0) { try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(s)); } catch (e) {} changed = true; }
+                    }
+                }
+                if (!loadCsvBackup()) {
+                    const b = await idbGet("csv_backup");
+                    if (b && b.csv) { try { localStorage.setItem(CSV_BACKUP_KEY, JSON.stringify(b)); } catch (e) {} changed = true; }
+                }
+                if (changed) {
+                    renderSessionList();
+                    const emptyEl = document.getElementById('session-list-empty');
+                    if (emptyEl) emptyEl.style.display = 'none';
+                    showScanToast("端末の予備保存（IndexedDB）から保存データを戻しました");
+                }
+            } catch (e) { console.error("IndexedDB からの復元に失敗:", e); }
         }
         // ★ V15.6: CSV保存後に開くSlack DMグループ
         const SLACK_TEAM_ID = "T02F4QUA74M";
@@ -1409,6 +1631,7 @@
         function writeSessions(obj) {
             try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(obj)); }
             catch (e) { console.error("セッション保存失敗:", e); }
+            mirrorSessionsToIdb(obj);   // ★ 竹内専用版 12: IndexedDB にも同じ物を書く
         }
         function newSessionId() {
             return "s" + Date.now() + Math.floor(Math.random() * 1000);
@@ -1621,7 +1844,7 @@
             const box = document.getElementById('session-list');
             if (!box) return 0;
             box.innerHTML = ids.map(id => sessionRowHtml(id, sessions[id])).join("");
-            return ids.length;
+            return ids.length + renderCsvBackupRow();   // ★ 竹内専用版 9: CSV 控えの行も数える
         }
         // ★ V16.5: manual=true なら保存が0件でも一覧を開く（設定画面/一覧ボタンから）。
         //   起動時(manual省略)は保存があるときだけ自動表示。
@@ -1720,6 +1943,7 @@
             } catch (e) { document.getElementById('staff-id').value = BUILTIN_STAFF_ID; }
             document.getElementById('shop-id').value = "";
             document.getElementById('shop-name').innerText = "店舗を選択してください";
+            showShopManual(false);   // ★ 竹内専用版 11: 手入力欄は位置情報が使えない時だけ出す
             autoDetectShop();   // ★ 竹内専用版: 位置情報から店舗を自動特定
         }
 
@@ -1798,9 +2022,8 @@
             migrateLegacyState();          // 旧単一キーを1件だけ移行
             const _sessions = pruneOldSessions();
             const _ids = Object.keys(_sessions).filter(id => hasMeaningfulSavedData(_sessions[id]));
-            if (_ids.length > 0) {
-                showSessionList();
-            }
+            showSessionList(true);   // ★ 竹内専用版 9: 保存が無くても必ず「継続／新規」を聞く（無い事が一目で判る）
+            recoverFromIdbIfNeeded();   // ★ 竹内専用版 12: localStorage が空なら IndexedDB から戻す
 
             // ★ V20.4: 辞書の復号（保存済みパスワードがあれば自動、無ければ入力画面）
             initDictionary();
@@ -1911,6 +2134,7 @@
 
             if (!staffId || !shopId) {
                 alert("社員番号と店舗番号を入力してください");
+                showShopManual(true);   // ★ 竹内専用版 11: 位置で決まっていなければ手入力欄を出す
                 return;
             }
 
@@ -3623,19 +3847,16 @@
                 // ★ V16.3: 判別マップにも過去履歴にも無い＝過去に例の無い主基板QR → 赤文字警告
                 // ★ V16.9: 類似QRから予測できた場合はオレンジのバナーで案内するため赤文字は出さない
                 setUnknownMainboardNote(!typeMatched && !histHit && !fuzzyHit);
-                if (inspectionMode === 'seal') {   // ★ 竹内専用版: 封印破損はROM入力を省く
-                    // ⛔ 2026-09-30: 「なし」で送ると BOT が es4 の製造ロットを「なし」に上書きする（5店舗35台で実発生）。
-                    //    辞書（es4 の履歴）にこの主基板のロット番号があれば、その現在値をそのまま書く＝変更なしで通る。無ければ③で入力してもらう。
-                    if (histHit && autoFilledRom) {
-                        currentData.romId = autoFilledRom;
-                        currentStep = 4;
-                        updateUI();
-                        html5QrCode && html5QrCode.resume && html5QrCode.resume();
-                        saveState();
-                        showScanToast("封印破損: ロット番号は現在値 " + autoFilledRom + " を保持");
-                        return;
-                    }
-                    showScanToast("この主基板のロット番号が辞書に無いため、ROMを入力して下さい（スキップすると「なし」で上書きされます）");
+                if (inspectionMode === 'seal') {   // ★ 竹内専用版: 封印破損は ROM 入力を求めない（2026-10-02 竹内さんご指示「封印破損台でロット№入力は不要」）
+                    // ROM 欄は 辞書（es4 履歴）にロット番号があればその現在値、無ければ「なし」。宮崎さんの突合BOTは 9/30 に
+                    // 「ROM が『なし』の台は製造ロットを変更しない（元の値を保持）」へ修正済み（#es4 9/30 宮崎さん返信）。当方の es4_touroku.py も「なし」を元の値へ戻す。
+                    currentData.romId = (histHit && autoFilledRom) ? autoFilledRom : "なし";
+                    currentStep = 4;
+                    updateUI();
+                    html5QrCode && html5QrCode.resume && html5QrCode.resume();
+                    saveState();
+                    showScanToast((histHit && autoFilledRom) ? ("封印破損: ロット番号は現在値 " + autoFilledRom + " を保持") : "封印破損: ロット番号は変更しません");
+                    return;
                 }
                 currentStep = 3;
                 updateUI();
@@ -3849,7 +4070,7 @@
                 tr.innerHTML =
                     `<td>${d.machineId || ""}</td>` +
                     `<td>${d.mainBoardId || ""}</td>` +
-                    `<td>${d.romId || ""}</td>` +
+                    `<td>${(inspectionMode === 'seal' && d.romId === 'なし') ? '変更なし' : (d.romId || '')}</td>` +
                     `<td>${d.sealsText || ""}</td>`;
                 tbody.appendChild(tr);
             }
@@ -4367,7 +4588,6 @@
 
         function skipRomInput() {
             if (currentStep !== 3) return;
-            if (inspectionMode === 'seal' && !confirm("ロット番号を「なし」で送ると、イージスに入っている製造ロットが「なし」に上書きされます。\nそれでもスキップしますか？")) return;   // ★ 竹内専用版 2026-09-30
 
             currentData.romId = "なし";
             currentStep = 4;
@@ -4385,7 +4605,15 @@
                 setUnknownMainboardNote(false); // ★ V16.3: 未知主基板の警告もクリア
                 clearFuzzyRomState();           // ★ V16.9: 予測入力の表示・状態もクリア
                 expectedSeals = null;           // ★ V18.8: 主基板なし＝照合対象なし
-                if (inspectionMode === 'seal') showScanToast("主基板なし: ロット番号が判らないため ROM を入力して下さい（スキップすると「なし」で上書きされます）");   // ★ 竹内専用版 2026-09-30
+                if (inspectionMode === 'seal') {   // ★ 竹内専用版: 封印破損は主基板なしでも ROM 入力を求めない（2026-10-02）
+                    currentData.romId = "なし";
+                    currentStep = 4;
+                    updateUI();
+                    html5QrCode && html5QrCode.resume && html5QrCode.resume();
+                    saveState();
+                    showScanToast("封印破損: 主基板なし。ロット番号は変更しません");
+                    return;
+                }
                 currentStep = 3;
                 updateUI();
                 focusRomInput();
@@ -4433,6 +4661,7 @@
 
             updateUI();
             saveState(); // ★ 1台完了ごとに必ず保存
+            writeCsvBackup();   // ★ 竹内専用版 9: CSV 形式の控えも書く（端末保存が壊れた時の保険）
         }
 
         // ★ 「前へ戻る」：赤い確認画面を表示してからdoGoBackを実行
