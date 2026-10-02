@@ -950,7 +950,7 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 竹内専用 10/02 10:40</div>
+        <div class="version-tag">V23.2 竹内専用 10/02 15:31</div>
         <h3>初期設定</h3>
         <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号 (5桁)" value="5157">
         <input type="number" inputmode="numeric" id="shop-id" placeholder="店舗番号 (2桁)" oninput="updateShopName()">
@@ -966,7 +966,7 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 竹内専用 10/02 10:40</div>
+            <div class="version-tag">V23.2 竹内専用 10/02 15:31</div>
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                 <div id="status" class="status-badge">① 台番号スキャン</div>
@@ -1072,8 +1072,9 @@
 
         <!-- ★ V22.7: スキャン済みが増えても一番下までスワイプせずに済むよう、
              ボタン2つをスキャン済み一覧の「上」へ移動（一覧は下へ伸びていく） -->
-        <button class="btn-csv" onclick="downloadCSV()">現在のデータをCSV保存</button>
-        <button class="btn-secondary" onclick="exportCsvBackupFile()">💾 控えを書き出す（Files へ・Slack 案内なし）</button>
+        <button class="btn-csv" onclick="shareCsvToSlack()">📨 CSV を Slack へ送る（共有シート）</button>
+        <button class="btn-secondary" onclick="downloadCSV()">現在のデータをCSV保存（従来）</button>
+        <button class="btn-secondary" onclick="exportCsvBackupFile()">💾 控えを書き出す（Files へ）</button>
         <button class="btn-secondary" onclick="showSessionList(true)" style="margin-bottom:12px;">📁 自動保存データ一覧（続きから／削除）</button>
 
         <div class="card" style="overflow-x:auto; margin-bottom:30px;">   <!-- ★ V22.7: 最下部になったので下の余白をここへ -->
@@ -1360,6 +1361,38 @@
                     showScanToast("端末の予備保存（IndexedDB）から保存データを戻しました");
                 }
             } catch (e) { console.error("IndexedDB からの復元に失敗:", e); }
+        }
+
+        // ★ 13. CSV を共有シートから Slack へ直接渡す（2026-10-02 竹内さん「保存してから添付して…と操作が多い」）
+        //   iPhone の Web アプリは Slack API を直接叩けない（トークンを公開 HTML に置けない）ので、OS の共有シートに
+        //   CSV ファイルを渡す。共有シートで Slack を選ぶ → 送信先（いつもの DM グループ）を選ぶ → 送信。保存→添付の手順が無くなる。
+        //   共有シートが使えない端末では従来の「CSV保存→Slackで送信先を開く」へ。
+        async function shareCsvToSlack() {
+            if (!allData || allData.length === 0) { alert("まだ確定した台がありません"); return; }
+            const { blob, fileName } = buildCsvBlobAndFileName();
+            const file = new File([blob], fileName, { type: "text/csv" });
+            if (!(navigator.canShare && navigator.canShare({ files: [file] }))) {
+                downloadCSV();   // 従来手順
+                return;
+            }
+            try {
+                await navigator.share({ files: [file], title: fileName, text: "点検 " + (shopList[shopId] || shopId) + " " + allData.length + "台" });
+            } catch (e) {
+                if (e && e.name === "AbortError") return;   // 共有シートを閉じただけ
+                console.error("共有に失敗:", e);
+                downloadCSV();
+                return;
+            }
+            writeCsvBackup();
+            showResumeConfirm(
+                "共有シートへ CSV を渡しました（" + fileName + "）。\n\n" +
+                "Slack で送信を終えたら、下のいずれかを選んで下さい。\n\n" +
+                "続きからはじめる = データを残す（再起動時に復元可能）\n" +
+                "初期化して最初から = 自動保存を削除して店舗選択画面へ",
+                () => { resetToSetup(); },
+                null,
+                false
+            );
         }
         // ★ V15.6: CSV保存後に開くSlack DMグループ
         const SLACK_TEAM_ID = "T02F4QUA74M";
