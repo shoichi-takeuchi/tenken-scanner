@@ -950,7 +950,7 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 竹内専用 10/02 15:31</div>
+        <div class="version-tag">V23.2 竹内専用 10/05 04:22</div>
         <h3>初期設定</h3>
         <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号 (5桁)" value="5157">
         <input type="number" inputmode="numeric" id="shop-id" placeholder="店舗番号 (2桁)" oninput="updateShopName()">
@@ -966,7 +966,7 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 竹内専用 10/02 15:31</div>
+            <div class="version-tag">V23.2 竹内専用 10/05 04:22</div>
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                 <div id="status" class="status-badge">① 台番号スキャン</div>
@@ -1335,32 +1335,57 @@
             } catch (e) { console.error("IndexedDB 読込失敗:", key, e); return undefined; }
         }
         // 保存のたびに IndexedDB へも（writeSessions / writeCsvBackup から呼ぶ）
-        function mirrorSessionsToIdb(obj) { idbPut("sessions", obj); }
+        // ★ 2026-10-05: 起動直後（IndexedDB からの復元が終わる前）は書かない。起動時の古いセッション掃除が localStorage の
+        //   古い途中経過で IndexedDB の新しい控えを上書きしてしまうのを防ぐ。復元が終われば以後は毎回そのまま書く（削除も反映）。
+        let idbSessionsReady = false;
+        function mirrorSessionsToIdb(obj) { if (idbSessionsReady) idbPut("sessions", obj); }
         function mirrorCsvBackupToIdb() { try { const b = loadCsvBackup(); if (b) idbPut("csv_backup", b); } catch (e) {} }
-        // 起動時: localStorage が空（または壊れている）で IndexedDB に残っていれば戻してから一覧を出し直す
+        // 起動時: IndexedDB の控えの方が新しい（台数が多い／保存時刻が後）物があれば、そちらを採って一覧を出し直す
+        //   ★ 2026-10-05 修正: 旧版は「localStorage が空の時だけ」戻していた。強制終了で localStorage に古い途中経過
+        //   （例: 10台目）が残り、IndexedDB に新しい物（15台目）がある時は戻さず、11〜15台目が消えていた（竹内さん 10/5 も1回消失）。
+        //   セッションごと・CSV 控えごとに「台数が多い方、同数なら保存時刻が後の方」を採る（消える方向には決して寄せない）。
+        function _sessScore(x) {
+            if (!x) return [-1, 0];
+            const n = (x.allData ? x.allData.length : 0) + ((x.currentData && x.currentData.machineId) ? 0.5 : 0);
+            return [n, Date.parse(x.savedAt) || 0];
+        }
+        function _newer(a, b) {   // b の方が新しければ true
+            const sa = _sessScore(a), sb = _sessScore(b);
+            return sb[0] > sa[0] || (sb[0] === sa[0] && sb[1] > sa[1]);
+        }
         async function recoverFromIdbIfNeeded() {
             try {
                 const cur = loadSessions();
-                const curN = Object.keys(cur).filter(id => hasMeaningfulSavedData(cur[id])).length;
-                let changed = false;
-                if (curN === 0) {
-                    const s = await idbGet("sessions");
-                    if (s && typeof s === "object") {
-                        const n = Object.keys(s).filter(id => hasMeaningfulSavedData(s[id])).length;
-                        if (n > 0) { try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(s)); } catch (e) {} changed = true; }
+                let changed = false, gained = 0;
+                const s = await idbGet("sessions");
+                if (s && typeof s === "object") {
+                    for (const id in s) {
+                        if (!hasMeaningfulSavedData(s[id])) continue;
+                        const t = Date.parse(s[id].savedAt) || 0;
+                        if (!t || (Date.now() - t) > SESSION_RETENTION_MS) continue;   // 7日より古い物は戻さない（掃除済み）
+                        if (_newer(cur[id], s[id])) {
+                            gained += Math.max(0, (s[id].allData || []).length - ((cur[id] && cur[id].allData) ? cur[id].allData.length : 0));
+                            cur[id] = s[id]; changed = true;
+                        }
                     }
+                    if (changed) { try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(cur)); } catch (e) {} }
                 }
-                if (!loadCsvBackup()) {
-                    const b = await idbGet("csv_backup");
-                    if (b && b.csv) { try { localStorage.setItem(CSV_BACKUP_KEY, JSON.stringify(b)); } catch (e) {} changed = true; }
-                }
+                // 逆向き（localStorage の方が新しい物・削除済みの物）は IndexedDB を追い付かせる
+                await idbPut("sessions", cur);
+                const lb = loadCsvBackup();
+                const b = await idbGet("csv_backup");
+                if (b && b.csv && (!lb || (b.count || 0) > (lb.count || 0) || ((b.count || 0) === (lb.count || 0) && (Date.parse(b.savedAt) || 0) > (Date.parse(lb.savedAt) || 0)))) {
+                    try { localStorage.setItem(CSV_BACKUP_KEY, JSON.stringify(b)); } catch (e) {}
+                    changed = true;
+                } else if (lb) { idbPut("csv_backup", lb); }
                 if (changed) {
                     renderSessionList();
                     const emptyEl = document.getElementById('session-list-empty');
                     if (emptyEl) emptyEl.style.display = 'none';
-                    showScanToast("端末の予備保存（IndexedDB）から保存データを戻しました");
+                    showScanToast("端末の予備保存（IndexedDB）から新しい保存データを戻しました" + (gained ? "（+" + gained + "台）" : ""));
                 }
             } catch (e) { console.error("IndexedDB からの復元に失敗:", e); }
+            finally { idbSessionsReady = true; }
         }
 
         // ★ 13. CSV を共有シートから Slack へ直接渡す（2026-10-02 竹内さん「保存してから添付して…と操作が多い」）
@@ -1371,6 +1396,9 @@
             if (!allData || allData.length === 0) { alert("まだ確定した台がありません"); return; }
             const { blob, fileName } = buildCsvBlobAndFileName();
             const file = new File([blob], fileName, { type: "text/csv" });
+            // ★ 14b（2026-10-05）: 共有シート→Slack の間に iOS がこのページの処理を終了させると、localStorage の書き遅れ分
+            //   （ROM の学習など）が消える。共有シートを開く前に IndexedDB へ控えを書いておく（await しない＝共有の許可を失わない）
+            try { idbPut("rom_history", loadLocalRomHistory()); idbPut("sessions", loadSessions()); } catch (e) {}
             if (!(navigator.canShare && navigator.canShare({ files: [file] }))) {
                 downloadCSV();   // 従来手順
                 return;
@@ -1394,6 +1422,46 @@
                 false
             );
         }
+
+        // ★ 14. ROM の学習（主基板QR→ROM）も IndexedDB に控え、起動時に戻す＋保存データから学び直す（2026-10-05）
+        //   竹内さん 10/5「八日市場店で読んだ後に旭で同じ機種を読んだら、八日市場のデータが全く学習されていなかった」。
+        //   学習は localStorage の mainboardRomHistoryV1 にしか無く、12 の IndexedDB 控えの対象外だった＝強制終了の書き遅れで
+        //   消えれば戻らない。過去の点検CSV 1,736行では、他店の同機種データで類似ヒットする台が 71%（1,064/1,504）あり、
+        //   学習が残っていれば旭で予測が出ていた筈。
+        function mirrorRomHistoryToIdb(h) { idbPut("rom_history", h); }
+        async function recoverRomHistory() {
+            try {
+                const local = loadLocalRomHistory();
+                let add = 0;
+                const put = (qr, rom) => {
+                    const k = normalizeQrKey(qr);
+                    if (!k || qr === "なし" || typeof rom !== "string" || !ROM_VALUE_PATTERN.test(rom)) return;
+                    if (!local[k]) { local[k] = rom; add++; }
+                };
+                const idb = await idbGet("rom_history");
+                if (idb && typeof idb === "object") for (const k in idb) put(k, idb[k]);
+                const ss = loadSessions();
+                for (const id in ss) { const d = ss[id] && ss[id].allData; if (Array.isArray(d)) d.forEach(r => { if (r) put(r.mainBoardId, r.romId); }); }
+                const b = loadCsvBackup();
+                if (b && b.csv) { try { parseInspectionCsv(b.csv).rows.forEach(r => put(r.mainBoardId, r.romId)); } catch (e) {} }
+                if (add) { try { localStorage.setItem(ROM_HISTORY_LS_KEY, JSON.stringify(local)); } catch (e) {} showScanToast("ROM の学習データを " + add + " 件戻しました"); }
+                idbPut("rom_history", local);
+                return add;
+            } catch (e) { console.error("ROM 学習の復元に失敗:", e); return 0; }
+        }
+
+        // ★ 15. 画面から離れた瞬間（アプリ切替画面を出した・ホームへ戻った・共有シートで Slack が前に出た）に予備保存を書き切る（2026-10-05）
+        //   竹内さん「乗り換え案内のアプリはスワイプして終わらせても、前回入力した駅名が残っている」。ネイティブアプリは画面を離れる時に
+        //   保存を済ませる。Web アプリでも画面を離れる時に visibilitychange（hidden）／pagehide が来るので、そこで IndexedDB へ書く。
+        //   上スワイプで終了させるのはアプリ切替画面に入った後なので、この時点の保存が最後の砦になる。
+        function flushBackupsToIdb() {
+            if (!idbSessionsReady) return;   // 起動直後の復元前は書かない（古い中身で上書きしない）
+            try { idbPut("sessions", loadSessions()); } catch (e) {}
+            try { idbPut("rom_history", loadLocalRomHistory()); } catch (e) {}
+            try { const b = loadCsvBackup(); if (b) idbPut("csv_backup", b); } catch (e) {}
+        }
+        document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushBackupsToIdb(); });
+        window.addEventListener("pagehide", flushBackupsToIdb);
         // ★ V15.6: CSV保存後に開くSlack DMグループ
         const SLACK_TEAM_ID = "T02F4QUA74M";
         const SLACK_CHANNEL_ID = "C0BKHM4P7EC"; // ★ V16.1: 送信先DMグループ変更
@@ -2057,6 +2125,7 @@
             const _ids = Object.keys(_sessions).filter(id => hasMeaningfulSavedData(_sessions[id]));
             showSessionList(true);   // ★ 竹内専用版 9: 保存が無くても必ず「継続／新規」を聞く（無い事が一目で判る）
             recoverFromIdbIfNeeded();   // ★ 竹内専用版 12: localStorage が空なら IndexedDB から戻す
+            recoverRomHistory();   // ★ 竹内専用版 14: ROM の学習を IndexedDB・保存データから戻す
 
             // ★ V20.4: 辞書の復号（保存済みパスワードがあれば自動、無ければ入力画面）
             initDictionary();
@@ -2904,7 +2973,7 @@
             try {
                 const h = loadLocalRomHistory();
                 h[key] = romValue;
-                localStorage.setItem(ROM_HISTORY_LS_KEY, JSON.stringify(h));
+                localStorage.setItem(ROM_HISTORY_LS_KEY, JSON.stringify(h)); mirrorRomHistoryToIdb(h);   // ★ 竹内専用版 14
             } catch (e) {}
         }
 
