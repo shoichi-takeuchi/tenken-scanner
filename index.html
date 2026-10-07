@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="robots" content="noindex, nofollow">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>点検スキャナー V23.2 竹内専用</title>
+    <title>点検スキャナー2 V23.2 新UI</title>
 
     <!-- ★ V15.7修正: CDNが遅い/ブロックされてもトップpage描画を止めないよう async 化 -->
     <script async src="https://unpkg.com/html5-qrcode"></script>
@@ -950,11 +950,12 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 竹内専用 10/05 04:22</div>
+        <div class="version-tag">V23.2 新UI 10/07 06:33</div>
         <h3>初期設定</h3>
         <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号 (5桁)" value="5157">
         <input type="number" inputmode="numeric" id="shop-id" placeholder="店舗番号 (2桁)" oninput="updateShopName()">
         <div id="shop-name" class="shop-name-display">店舗を選択してください</div>
+        <div id="s2-shop-banner" class="s2-shop-banner s2-none">店舗が決まっていません</div>
         <div id="geo-status" style="font-size:13px;color:#555;margin-top:4px;min-height:1.2em;" onclick="autoDetectShop()">📍 位置情報から店舗を探します（タップで再取得）</div>
         <button type="button" id="shop-manual-btn" class="btn-secondary" style="margin-top:4px;" onclick="showShopManual(true)">店舗を手で選ぶ</button>
         <div id="dict-status"></div>
@@ -966,8 +967,9 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 竹内専用 10/05 04:22</div>
+            <div class="version-tag">V23.2 新UI 10/07 06:33</div>
 
+            <div id="s2-main-shop" style="display:none;"></div>   <!-- ★ 点検スキャナー2 ① -->
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                 <div id="status" class="status-badge">① 台番号スキャン</div>
                 <button onclick="initScanner()" style="width:auto; margin-top:0; padding:5px 10px; background:#ff9800; color:white; font-size:12px; border-radius:6px;">🔄 再起動</button>
@@ -1462,6 +1464,123 @@
         }
         document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushBackupsToIdb(); });
         window.addEventListener("pagehide", flushBackupsToIdb);
+        // ★ 点検スキャナー2（新UI）: 2026-10-07 竹内さんご要望の3点。カスタマイズ適用.py が HTML に差し込む。
+        //   ① 店舗名を大きく表示（初期設定画面の大きな帯＋点検画面の上に店舗名）
+        //   ② 封印QRを読めた時の合図（枠を緑で2回点滅＋「封印 N枚目」の大きな表示＋ブザー2回＋振動）
+        //   ③ 警告の無い確認画面を省く（台番・主基板・ROM。次の画面に「前へ戻る」があるため）。赤警告が出る時だけ従来どおり確認を出す
+        (function () {
+            const css = `
+        .s2-shop-banner{margin-top:10px;padding:12px 10px;border-radius:10px;text-align:center;font-weight:bold;font-size:30px;line-height:1.2;background:#0b3d91;color:#fff;letter-spacing:1px;}
+        .s2-shop-banner .s2-cap{display:block;font-size:13px;font-weight:normal;opacity:.85;margin-bottom:4px;letter-spacing:0;}
+        .s2-shop-banner.s2-none{background:#e5e7eb;color:#6b7280;font-size:20px;}
+        #s2-main-shop{font-size:20px;font-weight:bold;color:#fff;background:#0b3d91;border-radius:8px;padding:6px 10px;margin-bottom:8px;text-align:center;}
+        #s2-seal-flash{position:absolute;inset:0;border:14px solid #00e676;border-radius:10px;pointer-events:none;opacity:0;z-index:1000;display:flex;align-items:center;justify-content:center;box-sizing:border-box;}
+        #s2-seal-flash span{background:rgba(0,150,70,.88);color:#fff;font-size:34px;font-weight:bold;padding:8px 18px;border-radius:12px;}
+        #s2-seal-flash.s2-on{animation:s2blink .32s steps(1,end) 2;}
+        @keyframes s2blink{0%{opacity:1;}55%{opacity:0;}100%{opacity:0;}}
+        `;
+            try { const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st); } catch (e) {}
+        })();
+
+        // ---- ① 店舗名を大きく ----
+        function s2ShopText(id) {
+            if (!id) return "";
+            if (id.length === 1) id = "0" + id;
+            const nm = (typeof shopList !== "undefined" && shopList[id]) ? shopList[id] : "カスタム";
+            return id + "　" + nm;
+        }
+        function updateShopBanner() {
+            const b = document.getElementById('s2-shop-banner');
+            if (!b) return;
+            const inp = document.getElementById('shop-id');
+            const t = s2ShopText(inp ? inp.value.trim() : "");
+            if (t) {
+                b.className = "s2-shop-banner";
+                b.innerHTML = '<span class="s2-cap">点検する店舗（違う時は「店舗を手で選ぶ」）</span>' + escS2(t);
+            } else {
+                b.className = "s2-shop-banner s2-none";
+                b.innerHTML = '店舗が決まっていません';
+            }
+        }
+        function updateMainShopLabel() {
+            const el = document.getElementById('s2-main-shop');
+            if (!el) return;
+            const t = s2ShopText((typeof shopId !== "undefined" && shopId) ? String(shopId) : "");
+            el.innerText = t ? ("🏪 " + t + ((typeof inspectionMode !== "undefined" && inspectionMode === 'seal') ? "　🔧封印破損" : "")) : "";
+            el.style.display = t ? "" : "none";
+        }
+        function escS2(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+        document.addEventListener('DOMContentLoaded', () => { updateShopBanner(); });
+
+        // ---- ② 封印を読めた時の合図 ----
+        function s2Buzzer() {
+            try {
+                if (!audioContext) initAudio();
+                if (!audioContext) return;
+                if (audioContext.state === "suspended") audioContext.resume();
+                const now = audioContext.currentTime;
+                [0, 0.16].forEach(t0 => {            // 「ピッ・ピッ」2回（読取り成功の通常音とは別の音）
+                    const osc = audioContext.createOscillator(), g = audioContext.createGain();
+                    osc.type = "square";
+                    osc.frequency.setValueAtTime(2000, now + t0);
+                    g.gain.setValueAtTime(0.0001, now + t0);
+                    g.gain.exponentialRampToValueAtTime(0.35, now + t0 + 0.01);
+                    g.gain.setValueAtTime(0.35, now + t0 + 0.09);
+                    g.gain.exponentialRampToValueAtTime(0.0001, now + t0 + 0.11);
+                    osc.connect(g); g.connect(audioContext.destination);
+                    osc.start(now + t0); osc.stop(now + t0 + 0.12);
+                });
+            } catch (e) { console.error("ブザー失敗", e); }
+        }
+        function s2Haptic() {
+            // Android 等は vibrate。iPhone の Safari には vibrate が無いので、iOS 18 以降の「スイッチ」部品を切り替えた時の軽い振動を使う
+            try { if (navigator.vibrate && navigator.vibrate([90, 70, 90])) return; } catch (e) {}
+            try {
+                let lb = document.getElementById('s2-hap-label');
+                if (!lb) {
+                    const i = document.createElement('input');
+                    i.type = 'checkbox'; i.setAttribute('switch', ''); i.id = 's2-hap'; i.tabIndex = -1;
+                    i.style.cssText = 'position:fixed;left:-200px;top:0;opacity:0;pointer-events:none;';
+                    lb = document.createElement('label');
+                    lb.htmlFor = 's2-hap'; lb.id = 's2-hap-label';
+                    lb.style.cssText = 'position:fixed;left:-200px;top:0;opacity:0;pointer-events:none;';
+                    document.body.appendChild(i); document.body.appendChild(lb);
+                }
+                lb.click();
+                setTimeout(() => { try { lb.click(); } catch (e) {} }, 170);
+            } catch (e) {}
+        }
+        function s2FlashFrame(n) {
+            const w = document.getElementById('reader-wrapper');
+            if (!w) return;
+            let f = document.getElementById('s2-seal-flash');
+            if (!f) { f = document.createElement('div'); f.id = 's2-seal-flash'; f.innerHTML = '<span></span>'; w.appendChild(f); }
+            f.firstChild.innerText = "✔ 封印 " + n + "枚目";
+            f.classList.remove('s2-on'); void f.offsetWidth; f.classList.add('s2-on');
+        }
+        function sealSuccessSignal() {
+            const n = (currentData && currentData.seals) ? currentData.seals.length : 0;
+            s2FlashFrame(n);
+            s2Buzzer();
+            s2Haptic();
+        }
+
+        // ---- ③ 警告の無い確認画面を省く ----
+        //   台番・主基板・ROM は、赤警告（店舗違い・6桁誤読・ROM日付異常・過去ROMと違う 等）が無ければ確認を出さず確定する。
+        //   間違えた時は次の画面の「前へ戻る」で戻せる。封印登録（次の台へ）の確認は残す（次の台へ進むと戻れないため）。
+        function s2AutoApprove(value, isWarning, alarm) {
+            if (isWarning || alarm) return false;
+            if (currentStep !== 1 && currentStep !== 2 && currentStep !== 3) return false;
+            const label = { 1: "台番", 2: "主基板", 3: "ROM" }[currentStep];
+            pendingValue = value;
+            showScanToast(label + " " + value + " を確定");
+            approveValue();
+            return true;
+        }
+        // 台番を確定した直後、同じ台番QRがまだカメラに写っていて②主基板として読まれるのを防ぐ
+        function s2IsGhostOfMachineId(value) {
+            return !!(currentData && currentData.machineId && value === currentData.machineId);
+        }
         // ★ V15.6: CSV保存後に開くSlack DMグループ
         const SLACK_TEAM_ID = "T02F4QUA74M";
         const SLACK_CHANNEL_ID = "C0BKHM4P7EC"; // ★ V16.1: 送信先DMグループ変更
@@ -2226,6 +2345,7 @@
 
             document.getElementById('shop-name').innerText =
                 shopList[id] || (id === "" ? "店舗を選択してください" : "カスタム(" + id + ")");
+            updateShopBanner();   // ★ 点検スキャナー2 ①
         }
 
         function startApp(mode) {
@@ -3856,7 +3976,7 @@
             }
 
             if (currentStep === 2) {
-                if (isInvalidMainBoardQr(value)) {
+                if (isInvalidMainBoardQr(value) || s2IsGhostOfMachineId(value)) {
                     html5QrCode.resume();
                     return;
                 }
@@ -3881,11 +4001,11 @@
                     return;
                 }
 
-                playScanBeep();
                 currentData.seals.push(value);
                 updateSealDisplay();
                 updateUI();
                 showScanToast("封印を登録しました");
+                sealSuccessSignal();   // ★ 点検スキャナー2 ②
                 saveState(); // ★ 封印追加ごとに保存
                 html5QrCode.resume();
                 return;
@@ -3893,6 +4013,7 @@
         }
 
         function showConfirmation(value, isWarning = false, warningMsg = null, alarm = false) {
+            if (s2AutoApprove(value, isWarning, alarm)) return;   // ★ 点検スキャナー2 ③
             const modal = document.getElementById('confirm-modal');
             const warning = document.getElementById('warning-msg');
             const display = document.getElementById('scanned-display');
@@ -4078,6 +4199,7 @@
         function updateUI() {
             // ★ V22.3: 画面（工程）が変わったらズームを100%へ戻す
             if (window.resetZoom) window.resetZoom(120);
+            updateMainShopLabel();   // ★ 点検スキャナー2 ①
             document.getElementById('btn-skip').style.display = (currentStep === 2 || currentStep === 4) ? 'block' : 'none';
             document.getElementById('btn-finish').style.display = (currentStep === 4) ? 'block' : 'none';
             document.getElementById('btn-back').style.display = (currentStep > 1) ? 'block' : 'none';
