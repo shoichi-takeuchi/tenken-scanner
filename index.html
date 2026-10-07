@@ -4,10 +4,11 @@
     <meta charset="UTF-8">
     <meta name="robots" content="noindex, nofollow">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>点検スキャナー2 V23.2 新UI</title>
+    <title>点検スキャナー2 V23.2 新UI wasm</title>
 
     <!-- ★ V15.7修正: CDNが遅い/ブロックされてもトップpage描画を止めないよう async 化 -->
     <script async src="https://unpkg.com/html5-qrcode"></script>
+    <script async src="https://cdn.jsdelivr.net/npm/barcode-detector@3.2.2/dist/iife/ponyfill.js"></script>   <!-- ★ カメラ開発2: zxing-wasm -->
     <script async src="https://cdnjs.cloudflare.com/ajax/libs/encoding-japanese/2.1.0/encoding.min.js"></script>
 
     <style>
@@ -950,7 +951,7 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 新UI 10/07 06:43</div>
+        <div class="version-tag">V23.2 新UI 10/07 06:54</div>
         <h3>初期設定</h3>
         <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号 (5桁)" value="5157">
         <input type="number" inputmode="numeric" id="shop-id" placeholder="店舗番号 (2桁)" oninput="updateShopName()">
@@ -959,6 +960,8 @@
         <div id="geo-status" style="font-size:13px;color:#555;margin-top:4px;min-height:1.2em;" onclick="autoDetectShop()">📍 位置情報から店舗を探します（タップで再取得）</div>
         <button type="button" id="shop-manual-btn" class="btn-secondary" style="margin-top:4px;" onclick="showShopManual(true)">店舗を手で選ぶ</button>
         <div id="dict-status"></div>
+        <div id="s2-engine-row" style="margin-top:8px;font-size:14px;display:flex;gap:6px;align-items:center;">🔍 読取りエンジン <select id="s2-engine" style="flex:1;height:36px;font-size:15px;margin-top:0;padding:2px;" onchange="s2SetEngine(this.value)"><option value="wasm">新（zxing-wasm・斜め/小さいQRに強い）</option><option value="zxingjs">従来（ZXing-js）</option></select></div>
+        <div id="s2-engine-state" style="font-size:12px;color:#555;margin-top:2px;"></div>
         <button class="btn-primary" onclick="startApp('new')">🆕 新台の点検を開始</button>
         <button class="btn-primary" style="background:#b45309;margin-top:8px;" onclick="startApp('seal')">🔧 封印破損の点検を開始（ロット番号は現在値を保持）</button>
         <button class="btn-secondary" onclick="showSessionList(true)" style="margin-top:8px;">📁 保存データを開く（前回の続き）</button>
@@ -967,7 +970,7 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 新UI 10/07 06:43</div>
+            <div class="version-tag">V23.2 新UI 10/07 06:54</div>
 
             <div id="s2-main-shop" style="display:none;"></div>   <!-- ★ 点検スキャナー2 ① -->
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -1581,6 +1584,61 @@
         function s2IsGhostOfMachineId(value) {
             return !!(currentData && currentData.machineId && value === currentData.machineId);
         }
+        // ★ カメラ開発2: QR 読取りエンジンの入れ替え（2026-10-07 竹内さんご指示「エンジンを入れ替えよう」）
+        //   従来: html5-qrcode 2.3.8 内蔵の ZXing-js（iPhone の Safari には標準の BarcodeDetector が無いので常にこれ。正面向けで斜め・小さいQRに弱い）
+        //   新  : zxing-wasm（ZXing の C++ 版 zxing-cpp を WebAssembly にした物。barcode-detector@3.2.2 の ponyfill 経由）。
+        //         html5-qrcode は window.BarcodeDetector があればそれを使う作りなので、そこへ差し込むだけ（カメラ・ライト・枠などは従来のまま）。
+        //   初期設定画面の「読取りエンジン」で切替（端末に記憶・既定は新）。新が読み込めない時は自動で従来に戻る。
+        const S2_ENGINE_KEY = "scanEngineV1";                 // "wasm"（既定）| "zxingjs"
+        const S2_NATIVE_BD = window.BarcodeDetector;           // 元々の BarcodeDetector（iPhone では通常 undefined）
+        let s2WasmReady = false, s2WasmFailed = false, s2WasmPromise = null, s2EngineState = "";
+        function s2Sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+        function s2EnginePref() { try { return localStorage.getItem(S2_ENGINE_KEY) || "wasm"; } catch (e) { return "wasm"; } }
+        function s2SetEngine(v) { try { localStorage.setItem(S2_ENGINE_KEY, v); } catch (e) {} s2EngineState = ""; s2ShowEngine(); s2Prewarm(); }
+        function s2RestoreNative() {
+            if (S2_NATIVE_BD) window.BarcodeDetector = S2_NATIVE_BD;
+            else { try { delete window.BarcodeDetector; } catch (e) {} }
+        }
+        function s2ShowEngine() {
+            const pref = s2EnginePref();
+            const sel = document.getElementById('s2-engine'); if (sel && sel.value !== pref) sel.value = pref;
+            const txt = s2EngineState || (pref === "wasm" ? (s2WasmReady ? "新（zxing-wasm）準備OK" : s2WasmFailed ? "新の読込に失敗→従来で動作" : "新（zxing-wasm）準備中…") : "従来（ZXing-js）");
+            const st = document.getElementById('s2-engine-state'); if (st) st.innerText = txt;
+            const tag = (pref === "wasm" && s2WasmReady && !s2WasmFailed) ? "🔍wasm" : "🔍従来";
+            document.querySelectorAll('.version-tag').forEach(el => {
+                el.innerText = el.innerText.replace(/\s*🔍\S+$/, "") + " " + tag;
+            });
+        }
+        // 起動直後に .wasm（約1MB・jsDelivr）を先に読み込んでおく（点検開始時に待たせない）
+        async function s2Prewarm() {
+            if (s2EnginePref() !== "wasm" || s2WasmPromise) { s2ShowEngine(); return; }
+            for (let i = 0; i < 25 && !window.BarcodeDetectionAPI; i++) await s2Sleep(200);
+            const api = window.BarcodeDetectionAPI;
+            if (!api || !api.prepareZXingModule) { s2WasmFailed = true; s2ShowEngine(); return; }
+            s2WasmPromise = Promise.resolve(api.prepareZXingModule({ fireImmediately: true }))
+                .then(() => { s2WasmReady = true; s2WasmFailed = false; })
+                .catch(e => { console.error("zxing-wasm 読込失敗", e); s2WasmFailed = true; })
+                .finally(() => s2ShowEngine());
+            s2ShowEngine();
+        }
+        // initScanner / 修正画面のカメラを作る直前に呼ぶ。選んだエンジンを window.BarcodeDetector に入れる
+        async function s2EnsureEngine() {
+            if (s2EnginePref() !== "wasm") { s2RestoreNative(); s2ShowEngine(); return; }
+            await s2Prewarm();
+            if (s2WasmPromise && !s2WasmReady && !s2WasmFailed) { await Promise.race([s2WasmPromise, s2Sleep(4000)]); }
+            const api = window.BarcodeDetectionAPI;
+            if (s2WasmReady && api && api.BarcodeDetector) window.BarcodeDetector = api.BarcodeDetector;
+            else s2RestoreNative();   // 読み込めない（電波・CDN）時は従来どおり ZXing-js
+            s2ShowEngine();
+        }
+        // html5-qrcode は BarcodeDetector があると「BarcodeDetector と ZXing-js を1コマずつ交互」に使う。
+        // 新エンジンが準備できていれば交互をやめて新だけにする（従来との違いがはっきりし、1コマの処理も軽い）
+        function s2TuneDecoder(sc) {
+            try {
+                if (s2EnginePref() === "wasm" && s2WasmReady && sc && sc.qrcode && sc.qrcode.secondaryDecoder) sc.qrcode.secondaryDecoder = undefined;
+            } catch (e) {}
+        }
+        document.addEventListener('DOMContentLoaded', () => { s2Prewarm(); });
         // ★ V15.6: CSV保存後に開くSlack DMグループ
         const SLACK_TEAM_ID = "T02F4QUA74M";
         const SLACK_CHANNEL_ID = "C0BKHM4P7EC"; // ★ V16.1: 送信先DMグループ変更
@@ -2400,7 +2458,9 @@
             updateTorchButton();
             getTorchButtons().forEach(b => b.style.display = 'none');
 
+            await s2EnsureEngine();   // ★ カメラ開発2: 選んだエンジンを入れる
             html5QrCode = new Html5Qrcode("reader", { useBarCodeDetectorIfSupported: true });
+            s2TuneDecoder(html5QrCode);   // ★ カメラ開発2
 
             const config = {
                 fps: 30,
@@ -4488,7 +4548,9 @@
             scrollElTop('edit-modal');   // カメラが画面外に出ないよう上に寄せる
 
             // ② 修正画面用のカメラを起動
+            await s2EnsureEngine();   // ★ カメラ開発2: 選んだエンジンを入れる
             editScanner = new Html5Qrcode("edit-reader", { useBarCodeDetectorIfSupported: true });
+            s2TuneDecoder(editScanner);   // ★ カメラ開発2
             try {
                 await editScanner.start(
                     { facingMode: "environment" },
