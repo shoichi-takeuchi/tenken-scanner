@@ -951,9 +951,10 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 新UI 10/07 06:54</div>
+        <div class="version-tag">V23.2 新UI 10/09 03:07</div>
         <h3>初期設定</h3>
-        <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号 (5桁)" value="5157">
+        <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号（初回だけ入力・次回から自動）" oninput="s2StaffNote()">
+        <div id="s2-staff-note" style="font-size:13px;color:#b45309;font-weight:bold;min-height:1em;"></div>
         <input type="number" inputmode="numeric" id="shop-id" placeholder="店舗番号 (2桁)" oninput="updateShopName()">
         <div id="shop-name" class="shop-name-display">店舗を選択してください</div>
         <div id="s2-shop-banner" class="s2-shop-banner s2-none">店舗が決まっていません</div>
@@ -970,7 +971,7 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 新UI 10/07 06:54</div>
+            <div class="version-tag">V23.2 新UI 10/09 03:07</div>
 
             <div id="s2-main-shop" style="display:none;"></div>   <!-- ★ 点検スキャナー2 ① -->
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -1107,6 +1108,42 @@
             "38": "佐原", "39": "川越", "40": "町田", "41": "セン南", "45": "ウイング"
         };
 
+        // ★ 社員番号: 初回だけ入力 → 次回から自動（2026-10-07 竹内さんご要望。5157 固定をやめ、誰でも使える様に）
+        //   優先: ① URL の #k=…&s=社員番号（ホーム画面のアイコンに残る・配る側が決められる）
+        //         ② 端末保存（localStorage lastStaffIdV1・原本 V15.1 の仕組み）
+        //         ③ 予備保存（IndexedDB staff_id。localStorage が消えた時に戻す）
+        //         ④ どれも無ければ空欄＝初回だけ手入力（点検開始で ②③ に保存）
+        function s2StaffFromUrl() {
+            try { const m = (location.hash || "").match(/[#&]s=(\d{3,6})(?:&|$)/); return m ? m[1] : ""; } catch (e) { return ""; }
+        }
+        function s2StaffLocal() { try { return localStorage.getItem(STAFF_ID_LS_KEY) || ""; } catch (e) { return ""; } }
+        function s2SaveStaffId(v) {
+            if (!v) return;
+            try { localStorage.setItem(STAFF_ID_LS_KEY, v); } catch (e) {}
+            try { idbPut("staff_id", v); } catch (e) {}
+        }
+        function s2StaffIdGuess() {
+            const el = document.getElementById('staff-id');
+            return s2StaffFromUrl() || s2StaffLocal() || (el ? el.value : "") || "";
+        }
+        function s2StaffNote() {
+            const el = document.getElementById('staff-id'), nt = document.getElementById('s2-staff-note');
+            if (!el || !nt) return;
+            nt.innerText = el.value ? "" : "初回だけ社員番号を入れて下さい（次回から自動で入ります）";
+        }
+        async function s2FillStaffId() {
+            const el = document.getElementById('staff-id');
+            if (!el) return;
+            const fromUrl = s2StaffFromUrl();
+            let v = fromUrl || s2StaffLocal();
+            if (!v) {
+                try { v = (await idbGet("staff_id")) || ""; } catch (e) { v = ""; }
+                if (v) { try { localStorage.setItem(STAFF_ID_LS_KEY, v); } catch (e) {} }
+            }
+            if (v && (fromUrl || !el.value)) el.value = v;
+            if (fromUrl) s2SaveStaffId(fromUrl);
+            s2StaffNote();
+        }
         // ★ 竹内専用版: 位置情報（GPS）から最寄り店舗を自動特定して店舗番号を入れる（2026-09-30 竹内さんご要望）
         //   座標の出典は Google マップの店舗登録（2026-09-30 取得）。店が動いたら SHOP_GEO を直す。
         const SHOP_GEO = {
@@ -1224,7 +1261,7 @@
             activeSessionId = newSessionId();
             closeSessionList();
             restoreState({
-                staffId: p.staffId || BUILTIN_STAFF_ID, shopId: p.shopId, allData: p.rows,
+                staffId: p.staffId || s2StaffIdGuess(), shopId: p.shopId, allData: p.rows,
                 currentData: { seals: [] }, currentStep: 1, inspectionMode: mode || 'new',
                 prevRom1: "", prevRom3: ""
             });
@@ -1470,7 +1507,8 @@
         // ★ 点検スキャナー2（新UI）: 2026-10-07 竹内さんご要望の3点。カスタマイズ適用.py が HTML に差し込む。
         //   ① 店舗名を大きく表示（初期設定画面の大きな帯＋点検画面の上に店舗名）
         //   ② 封印QRを読めた時の合図（枠を緑で2回点滅＋「封印 N枚目」の大きな表示＋ブザー2回。振動は iPhone で効かないため外した）
-        //   ③ 警告の無い確認画面を省く（台番・主基板・ROM。次の画面に「前へ戻る」があるため）。赤警告が出る時だけ従来どおり確認を出す
+        //   ③ 確認タップの省略は ①台番・②主基板 だけ（2026-10-09 竹内さんご指示「確認タップは省略したい、ロット№が違う時に入力する部分はオリジナルのまま」）。
+        //      ③ROM の入力・確認・学習は原本のまま触らない。iOS はタップの中でしかキーボードを開かないので、ROM欄はタップで開く（原本の onclick=select）
         (function () {
             const css = `
         .s2-shop-banner{margin-top:10px;padding:12px 10px;border-radius:10px;text-align:center;font-weight:bold;font-size:30px;line-height:1.2;background:#0b3d91;color:#fff;letter-spacing:1px;}
@@ -1567,17 +1605,24 @@
             s2Buzzer();
             // 振動は外した（2026-10-07 竹内さん実機: iOS のスイッチ触覚は感じない。iPhone の Safari には振動の命令が無い）
         }
-
-        // ---- ③ 警告の無い確認画面を省く ----
-        //   台番・主基板・ROM は、赤警告（店舗違い・6桁誤読・ROM日付異常・過去ROMと違う 等）が無ければ確認を出さず確定する。
-        //   間違えた時は次の画面の「前へ戻る」で戻せる。封印登録（次の台へ）の確認は残す（次の台へ進むと戻れないため）。
+        // ---- ③ ①台番・②主基板 の確認タップを省く（③ROM は原本のまま） ----
+        //   赤警告（店舗違いの台番・主基板の6桁誤読や形の異常）が出る時は従来どおり確認を出す。
+        //   ②を自動で確定すると approveValue() 内の focusRomInput() はタップ由来でないため iOS ではキーボードが開かない。
+        //   予測ロット№は ROM 欄に入っているので、違う時は ROM① をタップして入力（原本の onclick=select でキーボードと全選択）。
         function s2AutoApprove(value, isWarning, alarm) {
             if (isWarning || alarm) return false;
-            if (currentStep !== 1 && currentStep !== 2 && currentStep !== 3) return false;
-            const label = { 1: "台番", 2: "主基板", 3: "ROM" }[currentStep];
+            if (currentStep !== 1 && currentStep !== 2) return false;
+            const label = { 1: "台番", 2: "主基板" }[currentStep];
             pendingValue = value;
             showScanToast(label + " " + value + " を確定");
-            approveValue();
+            // approveValue() 末尾の html5QrCode.resume() は読取り中（一時停止していない）に呼ぶと例外を投げるので受け止め、飛ばされる saveState をここで行う
+            try { approveValue(); } catch (e) {}
+            try { saveState(); } catch (e) {}
+            if (currentStep === 3) {
+                const r1 = document.getElementById('rom-1'), r3 = document.getElementById('rom-3');
+                const rom = ((r1 && r1.value) || "") + ((typeof getRomType === "function") ? getRomType() : "") + ((r3 && r3.value) || "");
+                setTimeout(() => showScanToast(rom.length > 2 ? ("予測 " + rom + "　違う時は ROM① をタップして入力") : "ROM① をタップして入力"), 350);
+            }
             return true;
         }
         // 台番を確定した直後、同じ台番QRがまだカメラに写っていて②主基板として読まれるのを防ぐ
@@ -2212,13 +2257,14 @@
         //   ・店舗番号: 毎回クリア（前店舗のまま開始する事故を防止）
         // ========================================
         const STAFF_ID_LS_KEY = "lastStaffIdV1";
-        const BUILTIN_STAFF_ID = "5157";   // ★ 竹内専用版: 竹内さんの社員番号。毎回これを入れる（端末保存が消えていても入力不要）
+        const BUILTIN_STAFF_ID = "";   // ★ 2026-10-07: 固定の社員番号はやめた（社員番号.js で 初回入力→自動）
 
         function applySetupDefaults() {
             try {
                 const last = localStorage.getItem(STAFF_ID_LS_KEY);
-                document.getElementById('staff-id').value = BUILTIN_STAFF_ID || last || '';
-            } catch (e) { document.getElementById('staff-id').value = BUILTIN_STAFF_ID; }
+                document.getElementById('staff-id').value = s2StaffFromUrl() || last || '';
+            } catch (e) {}
+            s2FillStaffId();   // ★ 社員番号: 端末保存が消えていれば IndexedDB から戻す
             document.getElementById('shop-id').value = "";
             document.getElementById('shop-name').innerText = "店舗を選択してください";
             showShopManual(false);   // ★ 竹内専用版 11: 手入力欄は位置情報が使えない時だけ出す
@@ -2418,7 +2464,7 @@
                 return;
             }
 
-            try { localStorage.setItem(STAFF_ID_LS_KEY, staffId); } catch (e) {} // ★ V15.1: 次回の自動入力用
+            try { localStorage.setItem(STAFF_ID_LS_KEY, staffId); } catch (e) {} s2SaveStaffId(staffId);   // ★ 社員番号: IndexedDB にも控える // ★ V15.1: 次回の自動入力用
 
             initAudio();
 
@@ -4073,7 +4119,7 @@
         }
 
         function showConfirmation(value, isWarning = false, warningMsg = null, alarm = false) {
-            if (s2AutoApprove(value, isWarning, alarm)) return;   // ★ 点検スキャナー2 ③
+            if (s2AutoApprove(value, isWarning, alarm)) return;   // ★ 点検スキャナー2 ③（①②のみ）
             const modal = document.getElementById('confirm-modal');
             const warning = document.getElementById('warning-msg');
             const display = document.getElementById('scanned-display');
