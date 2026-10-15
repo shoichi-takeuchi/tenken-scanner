@@ -952,7 +952,7 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 新UI 10/15 02:37</div>
+        <div class="version-tag">V23.2 新UI 10/15 02:45</div>
         <h3>初期設定</h3>
         <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号（初回だけ入力・次回から自動）" oninput="s2StaffNote()">
         <div id="s2-staff-note" style="font-size:13px;color:#b45309;font-weight:bold;min-height:1em;"></div>
@@ -972,7 +972,7 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 新UI 10/15 02:37</div>
+            <div class="version-tag">V23.2 新UI 10/15 02:45</div>
 
             <div id="s2-main-shop" style="display:none;"></div>   <!-- ★ 点検スキャナー2 ① -->
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -1825,6 +1825,15 @@
 
         // 解除できたらアドレスバーから #k=... を消す（肩越しに見られる・スクショに写るのを防ぐ）
         //   ブックマーク側のURLは消えないので、次回も自動解除は効く。
+        function s2PutStaffInUrl(v) {   // ★ 竹内専用版 16: #k=鍵 の後ろに &s=社員番号 を付ける（既にあれば置き換え）
+            try {
+                if (!v || !history.replaceState) return;
+                let h = (location.hash || "").replace(/^#/, "").replace(/(^|&)s=\d*(?=&|$)/, "$1").replace(/^&+|&+$/g, "").replace(/&&+/g, "&");
+                h = h ? (h + "&s=" + v) : ("s=" + v);
+                history.replaceState(null, "", location.pathname + location.search + "#" + h);
+            } catch (e) {}
+        }
+
         function stripKeyFromUrl() {
             try {
                 return;  // ★ 竹内専用版: #k= を残す（ホーム画面追加・ブックマークに鍵が残り、端末保存が別領域でも入力不要）
@@ -2483,7 +2492,7 @@
                 return;
             }
 
-            try { localStorage.setItem(STAFF_ID_LS_KEY, staffId); } catch (e) {} s2SaveStaffId(staffId);   // ★ 社員番号: IndexedDB にも控える // ★ V15.1: 次回の自動入力用
+            try { localStorage.setItem(STAFF_ID_LS_KEY, staffId); } catch (e) {} s2SaveStaffId(staffId); s2PutStaffInUrl(staffId);   // ★ 社員番号: IndexedDB にも控える ／16: URL にも乗せる // ★ V15.1: 次回の自動入力用
 
             initAudio();
 
