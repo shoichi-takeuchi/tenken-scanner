@@ -39,8 +39,9 @@
             position: absolute;
             top: 8px;
             right: 12px;
-            font-size: 10px;
-            color: #999;
+            font-size: 16px;      /* ★ 竹内専用版 15: 10px → 16px */
+            color: #111;          /* ★ 竹内専用版 15: #999 → 濃い文字 */
+            font-weight: 700;
         }
 
         #reader-wrapper {
@@ -951,7 +952,7 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 新UI 10/09 03:07</div>
+        <div class="version-tag">V23.2 新UI 10/15 02:37</div>
         <h3>初期設定</h3>
         <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号（初回だけ入力・次回から自動）" oninput="s2StaffNote()">
         <div id="s2-staff-note" style="font-size:13px;color:#b45309;font-weight:bold;min-height:1em;"></div>
@@ -971,7 +972,7 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 新UI 10/09 03:07</div>
+            <div class="version-tag">V23.2 新UI 10/15 02:37</div>
 
             <div id="s2-main-shop" style="display:none;"></div>   <!-- ★ 点検スキャナー2 ① -->
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -1608,21 +1609,19 @@
         // ---- ③ ①台番・②主基板 の確認タップを省く（③ROM は原本のまま） ----
         //   赤警告（店舗違いの台番・主基板の6桁誤読や形の異常）が出る時は従来どおり確認を出す。
         //   ②を自動で確定すると approveValue() 内の focusRomInput() はタップ由来でないため iOS ではキーボードが開かない。
-        //   予測ロット№は ROM 欄に入っているので、違う時は ROM① をタップして入力（原本の onclick=select でキーボードと全選択）。
+        //   ROM 欄の案内（自動入力・予測・例の無いQR）は原本の表示に任せる。違う時は ROM① をタップして入力（原本の onclick=select でキーボードと全選択）。
         function s2AutoApprove(value, isWarning, alarm) {
             if (isWarning || alarm) return false;
             if (currentStep !== 1 && currentStep !== 2) return false;
-            const label = { 1: "台番", 2: "主基板" }[currentStep];
+            // 文言は原本の工程名（status の titles: 「① 台番号スキャン」「② 主基板スキャン」「③ ROM入力」）に合わせる。
+            // ③の案内は出さない: ROM欄の「過去取得済みのＲＯＭ番号を自動入力しております」（赤）／類似QRからの予測（紫）／
+            // 「過去に例の無い主基板QR」（赤）は原本が出し分けている。予測が無い時は前回入力値が残る仕様なので「予測」とは呼ばない。
+            const label = { 1: "台番号", 2: "主基板" }[currentStep];
             pendingValue = value;
-            showScanToast(label + " " + value + " を確定");
+            showScanToast(label + " " + value + " を確定しました");
             // approveValue() 末尾の html5QrCode.resume() は読取り中（一時停止していない）に呼ぶと例外を投げるので受け止め、飛ばされる saveState をここで行う
             try { approveValue(); } catch (e) {}
             try { saveState(); } catch (e) {}
-            if (currentStep === 3) {
-                const r1 = document.getElementById('rom-1'), r3 = document.getElementById('rom-3');
-                const rom = ((r1 && r1.value) || "") + ((typeof getRomType === "function") ? getRomType() : "") + ((r3 && r3.value) || "");
-                setTimeout(() => showScanToast(rom.length > 2 ? ("予測 " + rom + "　違う時は ROM① をタップして入力") : "ROM① をタップして入力"), 350);
-            }
             return true;
         }
         // 台番を確定した直後、同じ台番QRがまだカメラに写っていて②主基板として読まれるのを防ぐ
@@ -2407,6 +2406,26 @@
             } catch (e) {
                 console.error("AudioContext 初期化失敗", e);
             }
+        }
+
+        function s2IdBeep() {   // ★ 竹内専用版 14: 台番号・基板番号の読取り音「ピロッ」（2200→2700Hz 矩形波）
+            try {
+                if (!audioContext) initAudio();
+                if (!audioContext) return;
+                if (audioContext.state === "suspended") audioContext.resume();
+                const now = audioContext.currentTime;
+                [[2200, 0], [2700, 0.07]].forEach(([freq, t0]) => {   // 低→高の2音。封印の「ピッ・ピッ」（同音2回）と区別
+                    const osc = audioContext.createOscillator(), g = audioContext.createGain();
+                    osc.type = "square";
+                    osc.frequency.setValueAtTime(freq, now + t0);
+                    g.gain.setValueAtTime(0.0001, now + t0);
+                    g.gain.exponentialRampToValueAtTime(0.9, now + t0 + 0.01);
+                    g.gain.setValueAtTime(0.9, now + t0 + 0.07);
+                    g.gain.exponentialRampToValueAtTime(0.0001, now + t0 + 0.09);
+                    osc.connect(g); g.connect(audioContext.destination);
+                    osc.start(now + t0); osc.stop(now + t0 + 0.10);
+                });
+            } catch (e) { console.error("読取り音失敗", e); }
         }
 
         function playScanBeep() {
@@ -4072,7 +4091,7 @@
                     return;
                 }
 
-                playScanBeep();
+                s2IdBeep();   // ★ 竹内専用版 14
                 pendingValue = value;
 
                 // ★ V17.7: 選択中の店舗と台番QRの店舗が違えば赤警告付きで確認表示
@@ -4087,7 +4106,7 @@
                     return;
                 }
 
-                playScanBeep();
+                s2IdBeep();   // ★ 竹内専用版 14
                 pendingValue = value;
 
                 // ★ V17.4: 6桁誤読 or 形式不一致なら赤警告付きで確認表示
@@ -4626,7 +4645,7 @@
                 if (!isValidMachineId(value)) return;          // 数字のみ以外は無視
 
                 document.getElementById('edit-machine').value = value;
-                playScanBeep();
+                s2IdBeep();   // ★ 竹内専用版 14
 
                 // 選択中の店舗と違う店舗の台番なら注意喚起（ブロックはしない）
                 const w = machineIdConfirmWarning(value);
@@ -4643,7 +4662,7 @@
                 if (isInvalidMainBoardQr(value)) return;       // BISHOP…は主基板ではない
 
                 document.getElementById('edit-mainboard').value = value;
-                playScanBeep();
+                s2IdBeep();   // ★ 竹内専用版 14
 
                 // 形式チェック（V17.3 mainboardQrShape）。おかしければ注意喚起だけ出す
                 const qs = normalizeQrKey(value);
