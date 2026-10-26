@@ -952,7 +952,7 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 新UI 10/15 02:45</div>
+        <div class="version-tag">V23.2 新UI 10/26 11:36</div>
         <h3>初期設定</h3>
         <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号（初回だけ入力・次回から自動）" oninput="s2StaffNote()">
         <div id="s2-staff-note" style="font-size:13px;color:#b45309;font-weight:bold;min-height:1em;"></div>
@@ -972,7 +972,7 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 新UI 10/15 02:45</div>
+            <div class="version-tag">V23.2 新UI 10/26 11:36</div>
 
             <div id="s2-main-shop" style="display:none;"></div>   <!-- ★ 点検スキャナー2 ① -->
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -1143,7 +1143,31 @@
             }
             if (v && (fromUrl || !el.value)) el.value = v;
             if (fromUrl) s2SaveStaffId(fromUrl);
+            if (v) { s2SaveStaffId(v); try { s2PutStaffInUrl(v); } catch (e) {} }   // ★17: 戻せた値は毎回 端末保存・予備保存・URL の全部へ書き直す
+            s2WatchStaffInput();   // ★17: 入力した時点で保存（点検開始を待たない）
+            s2AskPersist();        // ★17: ブラウザに「この端末の保存を消さないで」と頼む
             s2StaffNote();
+        }
+        // ★ 17（2026-10-26 竹内さんご要望「処理の最初で確実に残る所に保存して欲しい」）
+        //   旧: 保存は「点検開始」を押した時だけ → 開始前にアプリを閉じると消えていた。
+        //   新: 社員番号を入れた時点（4桁以上になった時・欄を離れた時）で ②端末保存 ③予備保存(IndexedDB) と URL(&s=) に書く。
+        let s2StaffWatching = false;
+        function s2WatchStaffInput() {
+            if (s2StaffWatching) return;
+            const el = document.getElementById('staff-id');
+            if (!el) return;
+            s2StaffWatching = true;
+            const save = () => {
+                const v = (el.value || "").trim();
+                if (/^\d{3,6}$/.test(v)) { s2SaveStaffId(v); try { s2PutStaffInUrl(v); } catch (e) {} }
+                s2StaffNote();
+            };
+            el.addEventListener('change', save);
+            el.addEventListener('blur', save);
+            el.addEventListener('input', () => { if (/^\d{4,6}$/.test((el.value || "").trim())) save(); });
+        }
+        function s2AskPersist() {
+            try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
         }
         // ★ 竹内専用版: 位置情報（GPS）から最寄り店舗を自動特定して店舗番号を入れる（2026-09-30 竹内さんご要望）
         //   座標の出典は Google マップの店舗登録（2026-09-30 取得）。店が動いたら SHOP_GEO を直す。
