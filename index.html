@@ -36,10 +36,14 @@
         }
 
         .version-tag {
-            position: absolute;
-            top: 8px;
-            right: 12px;
-            font-size: 16px;      /* ★ 竹内専用版 15: 10px → 16px */
+            /* ★ 竹内専用版 15b（2026-11-02 版表示が長くなり右上の絶対配置で「初期設定」と重なった）: 見出しの上に1行で置く */
+            position: static;
+            display: block;
+            text-align: right;
+            margin: 0 0 4px;
+            line-height: 1.35;
+            word-break: break-all;
+            font-size: 14px;      /* ★ 竹内専用版 15: 10px → 16px → 15b: 14px（はみ出し防止） */
             color: #111;          /* ★ 竹内専用版 15: #999 → 濃い文字 */
             font-weight: 700;
         }
