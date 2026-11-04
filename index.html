@@ -956,7 +956,7 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 新UI 11/03 11:22 辞書 11/04 11:00</div>
+        <div class="version-tag">V23.2 新UI 11/05 08:10 辞書 11/04 11:00</div>
         <h3>初期設定</h3>
         <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号（初回だけ入力・次回から自動）" oninput="s2StaffNote()">
         <div id="s2-staff-note" style="font-size:13px;color:#b45309;font-weight:bold;min-height:1em;"></div>
@@ -976,7 +976,7 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 新UI 11/03 11:22 辞書 11/04 11:00</div>
+            <div class="version-tag">V23.2 新UI 11/05 08:10 辞書 11/04 11:00</div>
 
             <div id="s2-main-shop" style="display:none;"></div>   <!-- ★ 点検スキャナー2 ① -->
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -1798,7 +1798,7 @@
         // ★ 20（2026-11-03 竹内さんご指示）主基板の照合の強さでキーボードを出し分け／2つのQRが1画面に写った時の読取り順／封印破損の登録を1タップに
         //   ① 主基板の照合レベル（新台の②→③の時だけ。封印破損は ROM 入力が無いので対象外）
         //       1 完全一致（端末の学習・辞書）              … 確認タップ無し・キーボードを出さない（従来どおり）
-        //       2 近い予測: 一番近い同機種の番号差 ≤3 かつ ±10 以内の同機種(2台以上)が全て同じ ROM
+        //       2 近い予測: 一番近い同機種の番号差 ≤10（★20b: 当初は ≤3 かつ ±10 の同機種2台以上が全て同じROM）
         //                                                  … 確認タップ無し・キーボードを出さない（紫の帯で「予測」と出す）
         //       3 中位: 同機種で番号差 ≤100 の台がある／相似度80%以上のQRがある … ②の確認を出し、OK タップでキーボード
         //       4 不一致: 予測できない                         … ②の確認を出し、OK タップでキーボード
@@ -1809,9 +1809,9 @@
         //       ROM③ は隣の番号でも違う事があるので、1・2 でも必ず実物と見比べる（違えば ROM① をタップして直す）
         //   ② 2つの QR が1画面に写った時: その工程で読むべき QR だけを渡す（②は主基板、④はまだ読んでいない封印、①は台番）
         //       html5-qrcode は複数写ると「一番大きい QR」だけを返すので、④で主基板が大きく写っていると封印がいつまでも読めなかった
-        //   ③ 封印破損の「封印登録」: 封印1枚以上・前回の封印が全部読めている時は確認を出さずに1タップで登録して次の台へ
+        //   ③ 「封印登録」（封印破損・新台とも ★20b）: 封印1枚以上・前回の封印が全部読めている時は確認を出さずに1タップで登録して次の台へ
         //       前回あった封印が読めていない（赤警告）時は従来どおり確認を出す
-        const S2_NEAR_MAX_GAP = 3;     // 2 近い予測: 一番近い同機種の番号差の上限
+        const S2_NEAR_MAX_GAP = 10;    // 2 近い予測: 一番近い同機種の番号差の上限（★20b 11/4: 3→10。連番・近い番号はキーボードを出さない）
         const S2_NEAR_RANGE = 10;      // 2 近い予測: この番号差以内の同機種が全て同じ ROM なら「近い」
         const S2_MID_MAX_GAP = 100;    // 3 中位: 予測に使う同機種の番号差の上限
         function s2SplitMb(q) {
@@ -1848,7 +1848,7 @@
             list.sort(function (a, b) { return (a.gap - b.gap) || (b.pri - a.pri) || (b.idx - a.idx); });
             const top = list[0];
             const near = list.filter(function (c) { return c.gap <= S2_NEAR_RANGE; });
-            const confident = top.gap <= S2_NEAR_MAX_GAP && near.length >= 2 && near.every(function (c) { return c.rom === near[0].rom; });
+            const confident = top.gap <= S2_NEAR_MAX_GAP;   // ★20b（2026-11-04 竹内さん実機「連番でも近くでもキーボードが出る＝バグ」）: 周りの台が全て同じROMという条件を外した
             return { top: top, near: near, confident: confident };
         }
         // 照合レベル 1〜4（上の表）
@@ -1883,7 +1883,7 @@
                 fuzzyFilledRom = n.top.rom;
                 fuzzyMatchedQr = n.top.qr;
                 setRomFuzzyNote(n.confident
-                    ? '🤖 番号の近い同機種 ' + n.near.length + '台が全て同じROMでした（予測）。<br>実物と同じならそのまま確定してください。'
+                    ? '🤖 番号の近い同機種（番号差 ' + n.top.gap + '）のROMを入れました（予測）。<br>実物と同じならそのまま確定してください。'
                     : '🤖 番号の近い同機種からROMを予測しました（番号差 ' + n.top.gap + '）。<br>完全一致の実績ではありません。必ず実物と照合してください。');
                 setRomFuzzyHighlight(true);
                 showScanToast(n.confident ? '🤖 近い番号の同機種からROMを予測' : '🤖 過去データからROMを予測（要照合）');
@@ -1935,7 +1935,7 @@
         const s2OrigAskSeal = askSealRegister;
         askSealRegister = function (allowEmpty) {
             try {
-                if (currentStep === 4 && inspectionMode === 'seal') {
+                if (currentStep === 4) {   // ★20b（2026-11-04）: 新台も1タップ（封印破損だけだったのを広げた）
                     const seals = (currentData && currentData.seals) ? currentData.seals : [];
                     let st = 'none';
                     try { st = compareSeals().state; } catch (e) {}
