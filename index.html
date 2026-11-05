@@ -36,14 +36,13 @@
         }
 
         .version-tag {
-            /* ★ 竹内専用版 15b（2026-11-02 版表示が長くなり右上の絶対配置で「初期設定」と重なった）: 見出しの上に1行で置く */
-            position: static;
+            position: static;  /* ★ 15b: 2026-11-02 版表示が「初期設定」と重なった → 見出しの上に1行 */
             display: block;
             text-align: right;
             margin: 0 0 4px;
             line-height: 1.35;
             word-break: break-all;
-            font-size: 14px;      /* ★ 竹内専用版 15: 10px → 16px → 15b: 14px（はみ出し防止） */
+            font-size: 14px;      /* ★ 竹内専用版 15: 10px → 16px → 15b: 14px */
             color: #111;          /* ★ 竹内専用版 15: #999 → 濃い文字 */
             font-weight: 700;
         }
@@ -956,7 +955,7 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 新UI 11/05 08:10 辞書 11/04 11:00</div>
+        <div class="version-tag">V23.2 新UI 11/05 20:19 辞書 11/04 11:00</div>
         <h3>初期設定</h3>
         <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号（初回だけ入力・次回から自動）" oninput="s2StaffNote()">
         <div id="s2-staff-note" style="font-size:13px;color:#b45309;font-weight:bold;min-height:1em;"></div>
@@ -976,7 +975,7 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 新UI 11/05 08:10 辞書 11/04 11:00</div>
+            <div class="version-tag">V23.2 新UI 11/05 20:19 辞書 11/04 11:00</div>
 
             <div id="s2-main-shop" style="display:none;"></div>   <!-- ★ 点検スキャナー2 ① -->
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -1251,6 +1250,236 @@
             return { survived, count: d.count, romPre: S2_DIAG_PRE.rom, romNow, plus, kind: s2LaunchKindDetail() };
         }
         document.addEventListener('DOMContentLoaded', () => { setTimeout(() => { s2DiagRun(); }, 1500); });   // 予備からの ROM 学習の復元（recoverRomHistory）が終わった後
+        // ★ 20（2026-11-03 竹内さんご指示）主基板の照合の強さでキーボードを出し分け／2つのQRが1画面に写った時の読取り順／封印破損の登録を1タップに
+        //   ① 主基板の照合レベル（新台の②→③の時だけ。封印破損は ROM 入力が無いので対象外）
+        //       1 完全一致（端末の学習・辞書）              … 確認タップ無し・キーボードを出さない（従来どおり）
+        //       2 近い予測: 一番近い同機種の番号差 ≤10（★20b: 当初は ≤3 かつ ±10 の同機種2台以上が全て同じROM）
+        //                                                  … 確認タップ無し・キーボードを出さない（紫の帯で「予測」と出す）
+        //       3 中位: 同機種で番号差 ≤100 の台がある／相似度80%以上のQRがある … ②の確認を出し、OK タップでキーボード
+        //       4 不一致: 予測できない                         … ②の確認を出し、OK タップでキーボード
+        //     ※ iPhone はタップ（利用者の操作）の中でないとキーボードを開けない。3・4 は②の OK タップでキーボードを開く。
+        //     ※ 実データ 5,078台（9月〜10月 イージス登録 CSV）を時系列に再生した結果（2026-11-03）
+        //         2 近い予測: 全体の25%・ROM全桁一致 93.4%（ROM①＋種別 97.9%）
+        //         3 中位   : 全体の51%・ROM全桁一致 64%  ／ 従来の相似度80%予測は 同じ再生で 70%前後
+        //       ROM③ は隣の番号でも違う事があるので、1・2 でも必ず実物と見比べる（違えば ROM① をタップして直す）
+        //   ② 2つの QR が1画面に写った時: その工程で読むべき QR だけを渡す（②は主基板、④はまだ読んでいない封印、①は台番）
+        //       html5-qrcode は複数写ると「一番大きい QR」だけを返すので、④で主基板が大きく写っていると封印がいつまでも読めなかった
+        //   ③ 「封印登録」（封印破損・新台とも ★20b）: 封印1枚以上・前回の封印が全部読めている時は確認を出さずに1タップで登録して次の台へ
+        //       前回あった封印が読めていない（赤警告）時は従来どおり確認を出す
+        const S2_NEAR_MAX_GAP = 10;    // 2 近い予測: 一番近い同機種の番号差の上限（★20b 11/4: 3→10。連番・近い番号はキーボードを出さない）
+        const S2_NEAR_RANGE = 10;      // 2 近い予測: この番号差以内の同機種が全て同じ ROM なら「近い」
+        const S2_MID_MAX_GAP = 100;    // 3 中位: 予測に使う同機種の番号差の上限
+        function s2SplitMb(q) {
+            const s = mainboardQrShape(q);
+            if (s === 'A') return { model: q.substring(0, 4), no: parseInt(q.substring(4), 10) };
+            if (s === 'B') { const p = q.split('/'); return { model: p[0], no: parseInt(p[1], 10) }; }
+            return null;
+        }
+        // 同機種で番号の近い台の ROM。端末の学習を辞書より優先し、同じ番号差なら新しい登録を採る
+        function s2NeighborRom(qr) {
+            const key = normalizeQrKey(qr);
+            const me = s2SplitMb(key);
+            if (!me) return null;
+            const byQr = {};
+            let idx = 0;
+            const scan = function (dict, pri) {
+                if (!dict) return;
+                for (const raw in dict) {
+                    idx++;
+                    if (!Object.prototype.hasOwnProperty.call(dict, raw)) continue;
+                    const k = normalizeQrKey(raw);
+                    if (!k || k === key || byQr[k]) continue;
+                    const o = s2SplitMb(k);
+                    if (!o || o.model !== me.model) continue;
+                    const rom = dict[raw];
+                    if (typeof rom !== "string" || !ROM_VALUE_PATTERN.test(rom)) continue;
+                    byQr[k] = { qr: k, rom: rom, gap: Math.abs(o.no - me.no), pri: pri, idx: idx };
+                }
+            };
+            try { scan(loadLocalRomHistory(), 2); } catch (e) {}
+            try { scan(MAINBOARD_ROM_HISTORY, 1); } catch (e) {}
+            const list = Object.keys(byQr).map(function (k) { return byQr[k]; });
+            if (!list.length) return null;
+            list.sort(function (a, b) { return (a.gap - b.gap) || (b.pri - a.pri) || (b.idx - a.idx); });
+            const top = list[0];
+            const near = list.filter(function (c) { return c.gap <= S2_NEAR_RANGE; });
+            const confident = top.gap <= S2_NEAR_MAX_GAP;   // ★20b（2026-11-04 竹内さん実機「連番でも近くでもキーボードが出る＝バグ」）: 周りの台が全て同じROMという条件を外した
+            return { top: top, near: near, confident: confident };
+        }
+        // 照合レベル 1〜4（上の表）
+        function s2RomLevel(qr) {
+            try {
+                if (lookupRomHistory(qr)) return 1;
+                const n = s2NeighborRom(qr);
+                if (n && n.confident) return 2;
+                if (n && n.top.gap <= S2_MID_MAX_GAP) return 3;
+                if (FUZZY_ENABLED && findFuzzyRomHistory(qr)) return 3;
+                return 4;
+            } catch (e) { return 4; }
+        }
+        function s2FillRom(rom) {
+            const m = String(rom).match(ROM_VALUE_PATTERN);
+            if (!m) return false;
+            const type = m[2];
+            setRomTypeWithRom3(type);
+            const rom1 = document.getElementById('rom-1'), rom3 = document.getElementById('rom-3');
+            if (rom1) rom1.value = m[1];
+            if (rom3) rom3.value = (type === "KY") ? (m[3] || "") : "";
+            return true;
+        }
+        // 原本の「相似度80%の予測」の前に、同機種で番号の近い台からの予測を試す（実データで当たりが多い方を先に）
+        const s2OrigFuzzyApply = applyRomFromFuzzyHistory;
+        applyRomFromFuzzyHistory = function (mainBoardQr) {
+            clearFuzzyRomState();
+            if (!FUZZY_ENABLED) return false;
+            let n = null;
+            try { n = s2NeighborRom(mainBoardQr); } catch (e) { n = null; }
+            if (n && (n.confident || n.top.gap <= S2_MID_MAX_GAP) && s2FillRom(n.top.rom)) {
+                fuzzyFilledRom = n.top.rom;
+                fuzzyMatchedQr = n.top.qr;
+                setRomFuzzyNote(n.confident
+                    ? '🤖 番号の近い同機種（番号差 ' + n.top.gap + '）のROMを入れました（予測）。<br>実物と同じならそのまま確定してください。'
+                    : '🤖 番号の近い同機種からROMを予測しました（番号差 ' + n.top.gap + '）。<br>完全一致の実績ではありません。必ず実物と照合してください。');
+                setRomFuzzyHighlight(true);
+                showScanToast(n.confident ? '🤖 近い番号の同機種からROMを予測' : '🤖 過去データからROMを予測（要照合）');
+                return true;
+            }
+            return s2OrigFuzzyApply(mainBoardQr);
+        };
+        // ②の確認画面に出す1行（3・4 の時だけ）
+        function s2ConfirmNote(text) {
+            const disp = document.getElementById('scanned-display');
+            if (!disp || !disp.parentNode) return;
+            let el = document.getElementById('s2-confirm-note');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 's2-confirm-note';
+                el.style.cssText = "font-size:15px;font-weight:bold;color:#7c3aed;margin:-12px 0 14px;";
+                disp.parentNode.insertBefore(el, disp.nextSibling);
+            }
+            el.innerText = text || "";
+            el.style.display = text ? "block" : "none";
+        }
+        // ② 1画面に複数の QR: その工程で読むべき物だけを残す（無ければそのまま返す＝従来どおり）
+        function s2PreferCodes(codes) {
+            try {
+                if (!codes || codes.length < 2) return codes;
+                if (typeof isEditOpen === 'function' && isEditOpen()) return codes;
+                const v = function (c) { return String((c && c.rawValue) || "").trim(); };
+                let keep = null;
+                if (currentStep === 1) {
+                    keep = codes.filter(function (c) { return isValidMachineId(v(c)); });
+                } else if (currentStep === 2) {
+                    keep = codes.filter(function (c) { const x = v(c); return !isInvalidMainBoardQr(x) && !s2IsGhostOfMachineId(x) && !!mainboardQrShape(normalizeQrKey(x)); });
+                } else if (currentStep === 4) {
+                    const done = (currentData && currentData.seals) ? currentData.seals : [];
+                    keep = codes.filter(function (c) { const x = v(c); return isValidSealQr(x) && !mainboardQrShape(normalizeQrKey(x)) && done.indexOf(x) < 0; });
+                }
+                return (keep && keep.length) ? keep : codes;
+            } catch (e) { return codes; }
+        }
+        function s2WrapDetector(Base) {
+            if (!Base || Base.__s2wrapped) return Base;
+            class S2Detector extends Base {
+                async detect(src) { return s2PreferCodes(await super.detect(src)); }
+            }
+            S2Detector.__s2wrapped = true;
+            return S2Detector;
+        }
+        // ③ 封印破損の「封印登録」を1タップに
+        const s2OrigAskSeal = askSealRegister;
+        askSealRegister = function (allowEmpty) {
+            try {
+                if (currentStep === 4) {   // ★20b（2026-11-04）: 新台も1タップ（封印破損だけだったのを広げた）
+                    const seals = (currentData && currentData.seals) ? currentData.seals : [];
+                    let st = 'none';
+                    try { st = compareSeals().state; } catch (e) {}
+                    if (seals.length > 0 && st !== 'wait') {
+                        const n = seals.length;
+                        finishMachine();
+                        showScanToast("登録しました（封印 " + n + "枚）→ 次の台へ");
+                        return;
+                    }
+                }
+            } catch (e) {}
+            return s2OrigAskSeal(allowEmpty);
+        };
+        // ★ 21. テストモード（2026-11-05 竹内さんご指示「QRコードは色々種類が有って店舗に行かないと読み取る事が出来ない。
+        //   スマフォ内部のDBに記録しないし、QRは何でも読み取るテストモードがあると、ロット№予測以外の部分の遷移が確認できる」）
+        //   ・初期設定画面の「🧪 テストモード」を ON にして点検を開始すると、
+        //       ① どんな QR でも ①台番・②主基板・④封印 として受け付ける（形式チェック・店舗違い/形式不一致の赤警告・直前の台番と同じQRの除外を止める）
+        //       ② 端末に何も保存しない（セッション・CSV控え・IndexedDB・ROM学習・封印の実績）。画面上の履歴表と CSV 書き出しは動く
+        //   ・ロット№の予測・③ROM 入力・確認レベルの出し分けは触らない（ご指示の範囲外）
+        //   ・起動のたびに OFF に戻る（端末に記憶しない。店舗で誤ってテストモードのまま点検しない為）
+        //   ・ON の間は両画面の上に赤い帯「🧪 テストモード」を出す
+        var s2TestMode = false;
+        (function () {
+            try {
+                const st = document.createElement('style');
+                st.textContent = `
+        #s2-test-row{margin-top:10px;padding:10px;border:3px solid #dc2626;border-radius:10px;background:#fff1f2;display:flex;align-items:center;gap:10px;font-size:18px;font-weight:bold;color:#991b1b;}
+        #s2-test-row input{width:28px;height:28px;margin:0;flex:none;}
+        #s2-test-row .s2-test-sub{display:block;font-size:13px;font-weight:normal;color:#7f1d1d;margin-top:2px;}
+        .s2-test-banner{display:none;margin:28px 0 8px;padding:8px 10px;border-radius:8px;background:#dc2626;color:#fff;font-size:20px;font-weight:bold;text-align:center;letter-spacing:0;white-space:nowrap;}
+        body.s2-test .s2-test-banner{display:block;}
+        `;
+                document.head.appendChild(st);
+            } catch (e) {}
+        })();
+        function s2TestBannerText() { return "🧪 テストモード・保存しない"; }
+        function s2SetTestMode(on) {
+            s2TestMode = !!on;
+            try { document.body.classList.toggle('s2-test', s2TestMode); } catch (e) {}
+            const cb = document.getElementById('s2-test-cb'); if (cb && cb.checked !== s2TestMode) cb.checked = s2TestMode;
+            try { showScanToast(s2TestMode ? "テストモード ON：何でも読みます。端末には保存しません" : "テストモード OFF"); } catch (e) {}
+        }
+        function s2InstallTestMode() {
+            try {
+                if (document.getElementById('s2-test-row')) return;
+                // 初期設定画面: 読取りエンジンの行の下にスイッチ
+                const eng = document.getElementById('s2-engine-state') || document.getElementById('s2-engine-row');
+                if (eng) {
+                    const row = document.createElement('label');
+                    row.id = 's2-test-row';
+                    row.innerHTML = '<input type="checkbox" id="s2-test-cb" onchange="s2SetTestMode(this.checked)">'
+                        + '<span>🧪 テストモード<span class="s2-test-sub">QR は何でも読む・端末に保存しない（ロット№予測以外の遷移を確認する用）。起動のたびに OFF に戻ります</span></span>';
+                    eng.insertAdjacentElement('afterend', row);
+                    const b1 = document.createElement('div'); b1.className = 's2-test-banner'; b1.textContent = s2TestBannerText();
+                    const setup = document.getElementById('setup-screen'); if (setup) setup.insertBefore(b1, setup.firstChild);
+                }
+                // 点検画面: 一番上に赤い帯
+                const stt = document.getElementById('status');
+                const card = stt && stt.closest ? stt.closest('.card') : null;
+                if (card) { const b2 = document.createElement('div'); b2.className = 's2-test-banner'; b2.textContent = s2TestBannerText(); card.insertBefore(b2, card.firstChild); }
+            } catch (e) { console.error("テストモードの設置に失敗:", e); }
+        }
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', s2InstallTestMode); else s2InstallTestMode();
+
+        // ---- ① 何でも読む（テストモードの時だけ。OFF なら原本どおり） ----
+        (function () {
+            const oValidMachine = isValidMachineId, oInvalidMb = isInvalidMainBoardQr, oValidSeal = isValidSealQr;
+            const oGhost = s2IsGhostOfMachineId, oMbWarn = mainboardConfirmWarning, oMidWarn = machineIdConfirmWarning;
+            const nonEmpty = function (v) { return typeof v === "string" && v.trim().length > 0; };
+            isValidMachineId = function (v) { return s2TestMode ? nonEmpty(v) : oValidMachine(v); };
+            isInvalidMainBoardQr = function (v) { return s2TestMode ? !nonEmpty(v) : oInvalidMb(v); };
+            isValidSealQr = function (v) { return s2TestMode ? nonEmpty(v) : oValidSeal(v); };
+            s2IsGhostOfMachineId = function (v) { return s2TestMode ? false : oGhost(v); };   // 同じ QR を①→②→④で使い回せる様に
+            machineIdConfirmWarning = function (v) { return s2TestMode ? { warn: false, msg: null } : oMidWarn(v); };
+            mainboardConfirmWarning = function (v) { return s2TestMode ? { warn: false, msg: null } : oMbWarn(v); };
+        })();
+
+        // ---- ② 端末に保存しない（テストモードの時だけ） ----
+        (function () {
+            const oSaveState = saveState, oWriteSessions = writeSessions, oCsvBackup = writeCsvBackup;
+            const oRomHist = saveRomHistoryEntry, oSealHist = saveSealHistoryEntry, oIdbPut = idbPut, oFlush = flushBackupsToIdb;
+            saveState = function () { if (!s2TestMode) return oSaveState.apply(this, arguments); };
+            writeSessions = function () { if (!s2TestMode) return oWriteSessions.apply(this, arguments); };
+            writeCsvBackup = function () { if (!s2TestMode) return oCsvBackup.apply(this, arguments); };
+            saveRomHistoryEntry = function () { if (!s2TestMode) return oRomHist.apply(this, arguments); };
+            saveSealHistoryEntry = function () { if (!s2TestMode) return oSealHist.apply(this, arguments); };
+            idbPut = function () { if (!s2TestMode) return oIdbPut.apply(this, arguments); return Promise.resolve(); };
+            flushBackupsToIdb = function () { if (!s2TestMode) return oFlush.apply(this, arguments); };
+        })();
         // ★ 竹内専用版: 位置情報（GPS）から最寄り店舗を自動特定して店舗番号を入れる（2026-09-30 竹内さんご要望）
         //   座標の出典は Google マップの店舗登録（2026-09-30 取得）。店が動いたら SHOP_GEO を直す。
         const SHOP_GEO = {
@@ -1795,160 +2024,6 @@
             } catch (e) {}
         }
         document.addEventListener('DOMContentLoaded', () => { s2Prewarm(); });
-        // ★ 20（2026-11-03 竹内さんご指示）主基板の照合の強さでキーボードを出し分け／2つのQRが1画面に写った時の読取り順／封印破損の登録を1タップに
-        //   ① 主基板の照合レベル（新台の②→③の時だけ。封印破損は ROM 入力が無いので対象外）
-        //       1 完全一致（端末の学習・辞書）              … 確認タップ無し・キーボードを出さない（従来どおり）
-        //       2 近い予測: 一番近い同機種の番号差 ≤10（★20b: 当初は ≤3 かつ ±10 の同機種2台以上が全て同じROM）
-        //                                                  … 確認タップ無し・キーボードを出さない（紫の帯で「予測」と出す）
-        //       3 中位: 同機種で番号差 ≤100 の台がある／相似度80%以上のQRがある … ②の確認を出し、OK タップでキーボード
-        //       4 不一致: 予測できない                         … ②の確認を出し、OK タップでキーボード
-        //     ※ iPhone はタップ（利用者の操作）の中でないとキーボードを開けない。3・4 は②の OK タップでキーボードを開く。
-        //     ※ 実データ 5,078台（9月〜10月 イージス登録 CSV）を時系列に再生した結果（2026-11-03）
-        //         2 近い予測: 全体の25%・ROM全桁一致 93.4%（ROM①＋種別 97.9%）
-        //         3 中位   : 全体の51%・ROM全桁一致 64%  ／ 従来の相似度80%予測は 同じ再生で 70%前後
-        //       ROM③ は隣の番号でも違う事があるので、1・2 でも必ず実物と見比べる（違えば ROM① をタップして直す）
-        //   ② 2つの QR が1画面に写った時: その工程で読むべき QR だけを渡す（②は主基板、④はまだ読んでいない封印、①は台番）
-        //       html5-qrcode は複数写ると「一番大きい QR」だけを返すので、④で主基板が大きく写っていると封印がいつまでも読めなかった
-        //   ③ 「封印登録」（封印破損・新台とも ★20b）: 封印1枚以上・前回の封印が全部読めている時は確認を出さずに1タップで登録して次の台へ
-        //       前回あった封印が読めていない（赤警告）時は従来どおり確認を出す
-        const S2_NEAR_MAX_GAP = 10;    // 2 近い予測: 一番近い同機種の番号差の上限（★20b 11/4: 3→10。連番・近い番号はキーボードを出さない）
-        const S2_NEAR_RANGE = 10;      // 2 近い予測: この番号差以内の同機種が全て同じ ROM なら「近い」
-        const S2_MID_MAX_GAP = 100;    // 3 中位: 予測に使う同機種の番号差の上限
-        function s2SplitMb(q) {
-            const s = mainboardQrShape(q);
-            if (s === 'A') return { model: q.substring(0, 4), no: parseInt(q.substring(4), 10) };
-            if (s === 'B') { const p = q.split('/'); return { model: p[0], no: parseInt(p[1], 10) }; }
-            return null;
-        }
-        // 同機種で番号の近い台の ROM。端末の学習を辞書より優先し、同じ番号差なら新しい登録を採る
-        function s2NeighborRom(qr) {
-            const key = normalizeQrKey(qr);
-            const me = s2SplitMb(key);
-            if (!me) return null;
-            const byQr = {};
-            let idx = 0;
-            const scan = function (dict, pri) {
-                if (!dict) return;
-                for (const raw in dict) {
-                    idx++;
-                    if (!Object.prototype.hasOwnProperty.call(dict, raw)) continue;
-                    const k = normalizeQrKey(raw);
-                    if (!k || k === key || byQr[k]) continue;
-                    const o = s2SplitMb(k);
-                    if (!o || o.model !== me.model) continue;
-                    const rom = dict[raw];
-                    if (typeof rom !== "string" || !ROM_VALUE_PATTERN.test(rom)) continue;
-                    byQr[k] = { qr: k, rom: rom, gap: Math.abs(o.no - me.no), pri: pri, idx: idx };
-                }
-            };
-            try { scan(loadLocalRomHistory(), 2); } catch (e) {}
-            try { scan(MAINBOARD_ROM_HISTORY, 1); } catch (e) {}
-            const list = Object.keys(byQr).map(function (k) { return byQr[k]; });
-            if (!list.length) return null;
-            list.sort(function (a, b) { return (a.gap - b.gap) || (b.pri - a.pri) || (b.idx - a.idx); });
-            const top = list[0];
-            const near = list.filter(function (c) { return c.gap <= S2_NEAR_RANGE; });
-            const confident = top.gap <= S2_NEAR_MAX_GAP;   // ★20b（2026-11-04 竹内さん実機「連番でも近くでもキーボードが出る＝バグ」）: 周りの台が全て同じROMという条件を外した
-            return { top: top, near: near, confident: confident };
-        }
-        // 照合レベル 1〜4（上の表）
-        function s2RomLevel(qr) {
-            try {
-                if (lookupRomHistory(qr)) return 1;
-                const n = s2NeighborRom(qr);
-                if (n && n.confident) return 2;
-                if (n && n.top.gap <= S2_MID_MAX_GAP) return 3;
-                if (FUZZY_ENABLED && findFuzzyRomHistory(qr)) return 3;
-                return 4;
-            } catch (e) { return 4; }
-        }
-        function s2FillRom(rom) {
-            const m = String(rom).match(ROM_VALUE_PATTERN);
-            if (!m) return false;
-            const type = m[2];
-            setRomTypeWithRom3(type);
-            const rom1 = document.getElementById('rom-1'), rom3 = document.getElementById('rom-3');
-            if (rom1) rom1.value = m[1];
-            if (rom3) rom3.value = (type === "KY") ? (m[3] || "") : "";
-            return true;
-        }
-        // 原本の「相似度80%の予測」の前に、同機種で番号の近い台からの予測を試す（実データで当たりが多い方を先に）
-        const s2OrigFuzzyApply = applyRomFromFuzzyHistory;
-        applyRomFromFuzzyHistory = function (mainBoardQr) {
-            clearFuzzyRomState();
-            if (!FUZZY_ENABLED) return false;
-            let n = null;
-            try { n = s2NeighborRom(mainBoardQr); } catch (e) { n = null; }
-            if (n && (n.confident || n.top.gap <= S2_MID_MAX_GAP) && s2FillRom(n.top.rom)) {
-                fuzzyFilledRom = n.top.rom;
-                fuzzyMatchedQr = n.top.qr;
-                setRomFuzzyNote(n.confident
-                    ? '🤖 番号の近い同機種（番号差 ' + n.top.gap + '）のROMを入れました（予測）。<br>実物と同じならそのまま確定してください。'
-                    : '🤖 番号の近い同機種からROMを予測しました（番号差 ' + n.top.gap + '）。<br>完全一致の実績ではありません。必ず実物と照合してください。');
-                setRomFuzzyHighlight(true);
-                showScanToast(n.confident ? '🤖 近い番号の同機種からROMを予測' : '🤖 過去データからROMを予測（要照合）');
-                return true;
-            }
-            return s2OrigFuzzyApply(mainBoardQr);
-        };
-        // ②の確認画面に出す1行（3・4 の時だけ）
-        function s2ConfirmNote(text) {
-            const disp = document.getElementById('scanned-display');
-            if (!disp || !disp.parentNode) return;
-            let el = document.getElementById('s2-confirm-note');
-            if (!el) {
-                el = document.createElement('div');
-                el.id = 's2-confirm-note';
-                el.style.cssText = "font-size:15px;font-weight:bold;color:#7c3aed;margin:-12px 0 14px;";
-                disp.parentNode.insertBefore(el, disp.nextSibling);
-            }
-            el.innerText = text || "";
-            el.style.display = text ? "block" : "none";
-        }
-        // ② 1画面に複数の QR: その工程で読むべき物だけを残す（無ければそのまま返す＝従来どおり）
-        function s2PreferCodes(codes) {
-            try {
-                if (!codes || codes.length < 2) return codes;
-                if (typeof isEditOpen === 'function' && isEditOpen()) return codes;
-                const v = function (c) { return String((c && c.rawValue) || "").trim(); };
-                let keep = null;
-                if (currentStep === 1) {
-                    keep = codes.filter(function (c) { return isValidMachineId(v(c)); });
-                } else if (currentStep === 2) {
-                    keep = codes.filter(function (c) { const x = v(c); return !isInvalidMainBoardQr(x) && !s2IsGhostOfMachineId(x) && !!mainboardQrShape(normalizeQrKey(x)); });
-                } else if (currentStep === 4) {
-                    const done = (currentData && currentData.seals) ? currentData.seals : [];
-                    keep = codes.filter(function (c) { const x = v(c); return isValidSealQr(x) && !mainboardQrShape(normalizeQrKey(x)) && done.indexOf(x) < 0; });
-                }
-                return (keep && keep.length) ? keep : codes;
-            } catch (e) { return codes; }
-        }
-        function s2WrapDetector(Base) {
-            if (!Base || Base.__s2wrapped) return Base;
-            class S2Detector extends Base {
-                async detect(src) { return s2PreferCodes(await super.detect(src)); }
-            }
-            S2Detector.__s2wrapped = true;
-            return S2Detector;
-        }
-        // ③ 封印破損の「封印登録」を1タップに
-        const s2OrigAskSeal = askSealRegister;
-        askSealRegister = function (allowEmpty) {
-            try {
-                if (currentStep === 4) {   // ★20b（2026-11-04）: 新台も1タップ（封印破損だけだったのを広げた）
-                    const seals = (currentData && currentData.seals) ? currentData.seals : [];
-                    let st = 'none';
-                    try { st = compareSeals().state; } catch (e) {}
-                    if (seals.length > 0 && st !== 'wait') {
-                        const n = seals.length;
-                        finishMachine();
-                        showScanToast("登録しました（封印 " + n + "枚）→ 次の台へ");
-                        return;
-                    }
-                }
-            } catch (e) {}
-            return s2OrigAskSeal(allowEmpty);
-        };
         // ★ V15.6: CSV保存後に開くSlack DMグループ
         const SLACK_TEAM_ID = "T02F4QUA74M";
         const SLACK_CHANNEL_ID = "C0BKHM4P7EC"; // ★ V16.1: 送信先DMグループ変更
