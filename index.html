@@ -955,7 +955,7 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 新UI 11/05 20:19 辞書 11/17 11:00</div>
+        <div class="version-tag">V23.2 新UI 11/17 13:56 辞書 11/17 11:00</div>
         <h3>初期設定</h3>
         <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号（初回だけ入力・次回から自動）" oninput="s2StaffNote()">
         <div id="s2-staff-note" style="font-size:13px;color:#b45309;font-weight:bold;min-height:1em;"></div>
@@ -975,7 +975,7 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 新UI 11/05 20:19 辞書 11/17 11:00</div>
+            <div class="version-tag">V23.2 新UI 11/17 13:56 辞書 11/17 11:00</div>
 
             <div id="s2-main-shop" style="display:none;"></div>   <!-- ★ 点検スキャナー2 ① -->
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -1011,7 +1011,7 @@
                     <div style="flex:1; min-width:0;">
                         <input
                             type="text"
-                            inputmode="text"
+                            inputmode="numeric" maxlength="4"
                             id="rom-1"
                             placeholder="数字/音声"
                             onfocus="setActiveRomField('rom-1')"
@@ -1032,7 +1032,7 @@
                     <div style="flex:1; min-width:0;">
                         <input
                             type="text"
-                            inputmode="text"
+                            inputmode="numeric" maxlength="3"
                             id="rom-3"
                             placeholder="数字/音声(空欄可)"
                             onfocus="setActiveRomField('rom-3')"
@@ -1063,7 +1063,7 @@
                             onclick="spinActiveRom(-1)">↓</button>
                     </div>
                 </div>
-                <button type="button" id="rom-kb-toggle" class="btn-secondary" onmousedown="event.preventDefault();" onclick="toggleRomKbMode()">⌨ 数字入力</button>
+                <button type="button" id="rom-kb-toggle" class="btn-secondary" style="display:none;" onmousedown="event.preventDefault();" onclick="toggleRomKbMode()">⌨ 数字入力</button>
                 <button class="btn-secondary" onclick="skipRomInput()">ROM入力スキップ</button>
             </div>
 
@@ -4072,7 +4072,7 @@
 
         function getRomKbMode() {
             try {
-                return localStorage.getItem(ROM_KB_KEY) || "numeric";
+                return "numeric";   // ★ 竹内専用版 22: 常に数字キー（端末に「音声」が記憶されていても日本語キーボードにしない）
             } catch (e) {
                 return "numeric";
             }
@@ -4145,6 +4145,8 @@
             let v = el.value || "";
             v = v.replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
             v = v.replace(/[^0-9]/g, "");
+            const _s2max = (el.id === 'rom-1') ? 4 : (el.id === 'rom-3') ? 3 : 0;   // ★ 竹内専用版 22: ROM①4桁・ROM③3桁を超えた分は捨てる
+            if (_s2max && v.length > _s2max) v = v.slice(0, _s2max);
             if (el.value !== v) el.value = v;
             return v;
         }
