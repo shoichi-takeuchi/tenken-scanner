@@ -955,8 +955,7 @@
     <div id="scan-toast">封印を登録しました</div>
 
     <div id="setup-screen" class="card">
-        <div class="version-tag">V23.2 新UI 11/17 13:56 辞書 11/17 11:00</div>
-        <h3>初期設定</h3>
+        <div class="version-tag">V23.2 新UI 11/17 14:08 辞書 11/17 11:00</div>
         <input type="number" inputmode="numeric" id="staff-id" placeholder="社員番号（初回だけ入力・次回から自動）" oninput="s2StaffNote()">
         <div id="s2-staff-note" style="font-size:13px;color:#b45309;font-weight:bold;min-height:1em;"></div>
         <input type="number" inputmode="numeric" id="shop-id" placeholder="店舗番号 (2桁)" oninput="updateShopName()">
@@ -975,7 +974,7 @@
 
     <div id="main-app" style="display:none;">
         <div class="card">
-            <div class="version-tag">V23.2 新UI 11/17 13:56 辞書 11/17 11:00</div>
+            <div class="version-tag">V23.2 新UI 11/17 14:08 辞書 11/17 11:00</div>
 
             <div id="s2-main-shop" style="display:none;"></div>   <!-- ★ 点検スキャナー2 ① -->
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -1139,12 +1138,12 @@
         function s2StaffNote() {
             const el = document.getElementById('staff-id'), nt = document.getElementById('s2-staff-note');
             if (!el || !nt) return;
+            // 2026-11-17 竹内さんご指示「社員番号下の説明が長い、必要最低限でいい」: 空欄の時だけ1行。取得元・起動の表示はやめた（s2StaffSrc は内部に残す）
             if (el.value) {
-                nt.style.color = "#6b7280"; nt.style.fontWeight = "normal";
-                nt.innerText = s2StaffSrc ? ("社員番号の取得元: " + s2StaffSrc + "（起動: " + s2LaunchKind() + "）") : "";
+                nt.innerText = "";
             } else {
                 nt.style.color = "#b45309"; nt.style.fontWeight = "bold";
-                nt.innerText = "社員番号を入れて下さい（入れた時点で保存します）\n※保存が見つかりません（起動: " + s2LaunchKind() + "）";
+                nt.innerText = "社員番号を入れて下さい";
             }
         }
         async function s2FillStaffId() {
@@ -1243,9 +1242,10 @@
                 host.parentNode.insertBefore(x, host.nextSibling);
                 return x;
             })();
+            // 2026-11-17 竹内さんご指示「社員番号下の説明が長い、必要最低限でいい」: 普段は出さない。保存が消えていた時だけ1行（記録・数えるのは従来どおり）
             if (el) {
-                el.innerText = lines.join("\n");
-                if (!survived && idbD) el.style.color = "#b91c1c";
+                if (!survived && idbD) { el.style.color = "#b91c1c"; el.innerText = "⚠ 前回の保存が消えていました（予備から戻しました）"; }
+                else { el.innerText = ""; el.style.display = "none"; }
             }
             return { survived, count: d.count, romPre: S2_DIAG_PRE.rom, romNow, plus, kind: s2LaunchKindDetail() };
         }
@@ -1417,9 +1417,8 @@
             try {
                 const st = document.createElement('style');
                 st.textContent = `
-        #s2-test-row{margin-top:10px;padding:10px;border:3px solid #dc2626;border-radius:10px;background:#fff1f2;display:flex;align-items:center;gap:10px;font-size:18px;font-weight:bold;color:#991b1b;}
-        #s2-test-row input{width:28px;height:28px;margin:0;flex:none;}
-        #s2-test-row .s2-test-sub{display:block;font-size:13px;font-weight:normal;color:#7f1d1d;margin-top:2px;}
+        #s2-test-row{margin-top:14px;display:flex;align-items:center;gap:8px;font-size:15px;color:#374151;}
+        #s2-test-row input{width:22px;height:22px;margin:0;flex:none;}
         .s2-test-banner{display:none;margin:28px 0 8px;padding:8px 10px;border-radius:8px;background:#dc2626;color:#fff;font-size:20px;font-weight:bold;text-align:center;letter-spacing:0;white-space:nowrap;}
         body.s2-test .s2-test-banner{display:block;}
         `;
@@ -1436,16 +1435,15 @@
         function s2InstallTestMode() {
             try {
                 if (document.getElementById('s2-test-row')) return;
-                // 初期設定画面: 読取りエンジンの行の下にスイッチ
-                const eng = document.getElementById('s2-engine-state') || document.getElementById('s2-engine-row');
-                if (eng) {
+                // 初期設定画面: 一番下にチェック1つ（2026-11-17 竹内さんご指示「一番下に『テストモード』とチェックマスだけで良い」）
+                const setup = document.getElementById('setup-screen');
+                if (setup) {
                     const row = document.createElement('label');
                     row.id = 's2-test-row';
-                    row.innerHTML = '<input type="checkbox" id="s2-test-cb" onchange="s2SetTestMode(this.checked)">'
-                        + '<span>🧪 テストモード<span class="s2-test-sub">QR は何でも読む・端末に保存しない（ロット№予測以外の遷移を確認する用）。起動のたびに OFF に戻ります</span></span>';
-                    eng.insertAdjacentElement('afterend', row);
+                    row.innerHTML = '<input type="checkbox" id="s2-test-cb" onchange="s2SetTestMode(this.checked)"><span>テストモード</span>';
+                    setup.appendChild(row);
                     const b1 = document.createElement('div'); b1.className = 's2-test-banner'; b1.textContent = s2TestBannerText();
-                    const setup = document.getElementById('setup-screen'); if (setup) setup.insertBefore(b1, setup.firstChild);
+                    setup.insertBefore(b1, setup.firstChild);
                 }
                 // 点検画面: 一番上に赤い帯
                 const stt = document.getElementById('status');
